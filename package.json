@@ -1,6 +1,6 @@
 {
   "name": "@vlasky/zongji",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A fork of nevill/zongji mysql binlog listener running on Node.js that uses @vlasky/mysql to allow partial support for the MySQL compressed protocol.",
   "main": "index.js",
   "directories": {
@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "big-integer": "1.6.48",
-    "iconv-lite": "0.5.1",
-    "@vlasky/mysql": "2.18.1"
+    "iconv-lite": "0.6.2",
+    "@vlasky/mysql": "^2.18.1"
   }
 }

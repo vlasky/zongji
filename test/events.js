@@ -130,7 +130,7 @@ tap.test('Class constructor', test => {
     });
   }
 
-  const mysql = require('mysql');
+  const mysql = require('@vlasky/mysql');
 
   test.test('pass a mysql connection instance', test => {
     const conn = mysql.createConnection(settings.connection);

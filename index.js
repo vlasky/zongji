@@ -1,4 +1,4 @@
-const mysql = require('mysql');
+const mysql = require('@vlasky/mysql');
 const util = require('util');
 const EventEmitter = require('events').EventEmitter;
 const initBinlogClass = require('./lib/sequence/binlog');
