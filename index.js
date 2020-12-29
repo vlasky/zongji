@@ -8,10 +8,11 @@ const ConnectionConfigMap = {
   'Pool': obj => obj.config.connectionConfig,
 };
 
-const TableInfoQueryTemplate = 'SELECT ' +
-  'COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME, ' +
-  'COLUMN_COMMENT, COLUMN_TYPE ' +
-  'FROM information_schema.columns ' + "WHERE table_schema='%s' AND table_name='%s'";
+const TableInfoQueryTemplate = `SELECT 
+  COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME, 
+  COLUMN_COMMENT, COLUMN_TYPE 
+  FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s' 
+  ORDER BY ORDINAL_POSITION`;
 
 function ZongJi(dsn) {
   EventEmitter.call(this);
