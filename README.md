@@ -7,9 +7,9 @@ This package is a pure JS implementation based on [`mysql`](https://github.com/m
 
 # Latest Release
 
-The latest release is v0.5.0, only supports Node.js from v8.
+ZongJi release versions since 0.5.0 only support Node.js version 8 and above.
 
-v0.4.7 is the last release which supports Node.js v4.x.
+Version 0.4.7 is the last release that supports Node.js version 4.x.
 
 ## Quick Start
 
