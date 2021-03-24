@@ -1,6 +1,6 @@
 {
   "name": "@vlasky/zongji",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "A fork of nevill/zongji mysql binlog listener running on Node.js that uses @vlasky/mysql to allow partial support for the MySQL compressed protocol.",
   "main": "index.js",
   "directories": {
@@ -18,16 +18,15 @@
     "mysql",
     "binlog"
   ],
-  "author": "Nevill <nevill.dutt@gmail.com>",
+  "author": "Vlad Lasky <github@vladlasky.com> (https://github.com/vlasky)",
   "contributors": [
+    "Nevill <nevill.dutt@gmail.com> (https://github.com/nevill)",
     "numtel <ben@latenightsketches.com> (https://github.com/numtel)",
-    "rfanth <rfa@rfanth.com> (https://github.com/rfanth)"
+    "rfanth <rfa@rfanth.com> (https://github.com/rfanth)",
+    "Alexander Radyushin <alexander@fjedi.com> (https://github.com/fjedi)",
+    "Yousef El-Dardiry <yousefdardiry@gmail.com> (https://github.com/YousefED)"
   ],
   "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/nevill/zongji/issues"
-  },
-  "homepage": "https://github.com/nevill/zongji",
   "engines": {
     "node": ">= 8.0"
   },
@@ -38,6 +37,6 @@
   "dependencies": {
     "big-integer": "1.6.48",
     "iconv-lite": "0.6.2",
-    "@vlasky/mysql": "^2.18.1"
+    "@vlasky/mysql": "^2.18.2"
   }
 }
