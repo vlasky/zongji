@@ -1,9 +1,12 @@
-# ZongJi [![Build Status](https://travis-ci.org/nevill/zongji.svg?branch=master)](https://travis-ci.org/nevill/zongji)
-A MySQL binlog listener running on Node.js.
+A MySQL 8.0-compatible fork of ZongJi - a MySQL binlog listener for Node.js, [originally created by Nevill Dutt](https://github.com/nevill/zongji).
 
-ZongJi (踪迹) is pronounced as `zōng jì` in Chinese.
+[@vlasky/zongji](https://github.com/vlasky/zongji) has been tested working with MySQL 5.5, 5.6, 5.7 and 8.0.
 
-This package is a pure JS implementation based on [`mysql`](https://github.com/mysqljs/mysql). It has been tested to work in MySQL 5.5, 5.6, and 5.7.
+It leverages [`@vlasky/mysql`](https://github.com/vlasky/mysql), a fork of [`mysql`](https://github.com/mysqljs/mysql) with the following enhancements:
+
+* Support for authentication using the caching_sha2_password plugin, the new default authentication method in MySQL 8.0
+* Partial support for the MySQL compressed protocol (reads compressed data sent by server)
+* Optional sending of keepalive probe packets to check the state of the connection to the MySQL server and help keep the connection open when the network socket is idle
 
 # Latest Release
 
@@ -34,7 +37,7 @@ For a complete implementation see [`example.js`](example.js)...
 * Requires Node.js v8+
 
   ```bash
-  $ npm install zongji
+  $ npm install @vlasky/zongji
   ```
 
 * Enable MySQL binlog in `my.cnf`, restart MySQL server after making the changes.
@@ -91,7 +94,7 @@ Event Name | Description
 
 Option Name | Type | Description
 ------------|------|-------------------------------
-`serverId`  | `integer` | [Unique number (1 - 2<sup>32</sup>)](http://dev.mysql.com/doc/refman/5.0/en/replication-options.html#option_mysqld_server-id) to identify this replication slave instance. Must be specified if running more than one instance of ZongJi. Must be used in `start()` method for effect.<br>**Default:** `1`
+`serverId`  | `integer` | [Unique number (1 - 2<sup>32</sup>)](https://dev.mysql.com/doc/refman/5.0/en/replication-options.html#option_mysqld_server-id) to identify this replication slave instance. Must be specified if running more than one instance of ZongJi. Must be used in `start()` method for effect.<br>**Default:** `1`
 `startAtEnd` | `boolean` | Pass `true` to only emit binlog events that occur after ZongJi's instantiation. Must be used in `start()` method for effect.<br>**Default:** `false`
 `filename` | `string` | Begin reading events from this binlog file. If specified together with `position`, will take precedence over `startAtEnd`.
 `position` | `integer` | Begin reading events from this position. Must be included with `filename`.
@@ -108,11 +111,11 @@ Option Name | Type | Description
 Event name  | Description
 ------------|---------------
 `unknown`   | Catch any other events
-`query`     | [Insert/Update/Delete Query](http://dev.mysql.com/doc/internals/en/query-event.html)
+`query`     | [Insert/Update/Delete Query](https://dev.mysql.com/doc/internals/en/query-event.html)
 `intvar`    | [Autoincrement and LAST_INSERT_ID](https://dev.mysql.com/doc/internals/en/intvar-event.html)
-`rotate`    | [New Binlog file](http://dev.mysql.com/doc/internals/en/rotate-event.html) Not required to be included to rotate to new files, but it is required to be included in order to keep the `filename` and `position` properties updated with current values for [graceful restarting on errors](https://gist.github.com/numtel/5b37b2a7f47b380c1a099596c6f3db2f).
-`format`    | [Format Description](http://dev.mysql.com/doc/internals/en/format-description-event.html)
-`xid`       | [Transaction ID](http://dev.mysql.com/doc/internals/en/xid-event.html)
+`rotate`    | [New Binlog file](https://dev.mysql.com/doc/internals/en/rotate-event.html) Not required to be included to rotate to new files, but it is required to be included in order to keep the `filename` and `position` properties updated with current values for [graceful restarting on errors](https://gist.github.com/numtel/5b37b2a7f47b380c1a099596c6f3db2f).
+`format`    | [Format Description](https://dev.mysql.com/doc/internals/en/format-description-event.html)
+`xid`       | [Transaction ID](https://dev.mysql.com/doc/internals/en/xid-event.html)
 `tablemap`  | Before any row event (must be included for any other row events)
 `writerows` | Rows inserted, row data array available as `rows` property on event object
 `updaterows` | Rows changed, row data array available as `rows` property on event object
@@ -139,19 +142,19 @@ Name   | Description
 * install [Docker](https://www.docker.com/community-edition#download)
 * run `docker-compose up` and then `./docker-test.sh`
 
-## Reference
+## References
 
-I learnt many things from following resources while making ZongJi.
+The following resources provided valuable information that greatly assisted in creating ZongJi:
 
 * https://github.com/mysqljs/mysql
 * https://github.com/felixge/faster-than-c/
-* http://intuitive-search.blogspot.co.uk/2011/07/binary-log-api-and-replication-listener.html
+* https://web.archive.org/web/20130117004733/https://intuitive-search.blogspot.co.uk/2011/07/binary-log-api-and-replication-listener.html
 * https://github.com/Sannis/node-mysql-libmysqlclient
 * https://kkaefer.com/node-cpp-modules/
-* http://dev.mysql.com/doc/internals/en/replication-protocol.html
-* http://www.cs.wichita.edu/~chang/lecture/cs742/program/how-mysql-c-api.html
+* https://dev.mysql.com/doc/internals/en/replication-protocol.html
+* https://web.archive.org/web/20200201195450/https://www.cs.wichita.edu/~chang/lecture/cs742/program/how-mysql-c-api.html
 * https://github.com/jeremycole/mysql_binlog (Ruby implemenation of MySQL binlog parser)
-* http://dev.mysql.com/doc/internals/en/date-and-time-data-type-representation.html
+* https://dev.mysql.com/doc/internals/en/date-and-time-data-type-representation.html
 
 ## License
 MIT
