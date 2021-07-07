@@ -87,6 +87,7 @@ ZongJi.prototype._isChecksumEnabled = function(next) {
     .then(rows => {
       if (rows[0].checksum === 'NONE') {
         checksumEnabled = false;
+        return query(this.connection, 'SELECT 1');
       }
 
       if (checksumEnabled) {
