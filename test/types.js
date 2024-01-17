@@ -456,30 +456,9 @@ testDb.requireVersion('5.7.8', () => {
     // JSON from MySQL client has different whitespace than JSON.stringify
     // Therefore, parse and perform deep equality
     event.rows.forEach((row, index) => {
-      // assert.deepEqual does not work when comparison objects exceed 65536 bytes
-      // Perform alternative assertions for these large cases
       const expected = JSON.parse(this[index].col0);
       const actual = JSON.parse(row.col0);
-      if (this[index].col0.length > 65536) {
-        // Large cases are either array or object
-        if (expected instanceof Array) {
-          test.equal(expected.length, actual.length);
-          for (let i = 0; i < expected.length; i++) {
-            assert.deepEqual(expected[i], actual[i]);
-          }
-        } else {
-          const expectedKeys = Object.keys(expected);
-          const actualKeys = Object.keys(actual);
-          test.equal(expectedKeys.length, actualKeys.length);
-          assert.deepEqual(expectedKeys, actualKeys);
-          for (let j = 0; j < expectedKeys.length; j++) {
-            assert.deepEqual(expected[expectedKeys[j]], actual[expectedKeys[j]]);
-          }
-        }
-      } else {
-        // Comparison objects are smaller than 65536 bytes
-        assert.deepEqual(expected, actual);
-      }
+      assert.deepEqual(expected, actual);
     });
   });
 });
