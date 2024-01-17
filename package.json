@@ -7,7 +7,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "tap --bail --no-coverage --jobs=1 test/*.js",
+    "test": "tap --bail --jobs=1 test/*.js",
     "lint": "eslint ."
   },
   "repository": {
@@ -33,11 +33,11 @@
     "node": ">= 8.0"
   },
   "devDependencies": {
-    "eslint": "6.8.0",
-    "tap": "14.10.7"
+    "eslint": "8.56.0",
+    "tap": "18.6.1"
   },
   "dependencies": {
-    "big-integer": "1.6.51",
+    "big-integer": "1.6.52",
     "iconv-lite": "0.6.3",
     "@vlasky/mysql": "^2.18.6"
   }

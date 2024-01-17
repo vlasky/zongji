@@ -88,7 +88,7 @@ tap.test('Exclue all the schema', test => {
   zongji.on('binlog', event => eventLog.push(event));
   zongji.on('error', error => errorLog.push(error));
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
 
   // Set includeSchema to not include anything, recieve no row events
   // Ensure that filters are applied
@@ -139,7 +139,7 @@ tap.test('Change filter when ZongJi is running', test => {
     includeSchema: includeSchema
   });
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
 
   testDb.execute(
     [

@@ -16,7 +16,7 @@ tap.test('Connect to an invalid host', test => {
     test.end();
   });
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
   zongji.start();
 });
 
@@ -178,7 +178,7 @@ tap.test('Events come through in sequence', test => {
           position: first.get('position'),
         });
 
-        test.tearDown(() => second.stop());
+        test.teardown(() => second.stop());
       });
       setTimeout(() => first.stop(), NEW_INST_TIMEOUT);
     });
