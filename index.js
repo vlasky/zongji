@@ -22,6 +22,7 @@ function ZongJi(dsn) {
   this.ctrlCallbacks = [];
   this.tableMap = {};
   this.ready = false;
+  this.stopped = false;
   this.useChecksum = false;
 
   this._establishConnection(dsn);
@@ -207,6 +208,13 @@ ZongJi.prototype.get = function(name) {
 // - `startAtEnd` if true, will update filename / postion automatically
 // - `includeEvents`, `excludeEvents`, `includeSchema`, `exludeSchema` filter different binlog events bubbling
 ZongJi.prototype.start = function(options = {}) {
+  // If already running, just update filters (for pause/resume) and return
+  if (this.ready && !this.stopped) {
+    this._filters(options);
+    return;
+  }
+
+  this.stopped = false;
 
   this._options(options);
   this._filters(options);
@@ -284,9 +292,20 @@ ZongJi.prototype.start = function(options = {}) {
 
   Promise.all(promises)
     .then(() => {
+      // Check if stop() was called while promises were pending
+      if (this.stopped) {
+        return;
+      }
+
       this.BinlogClass = initBinlogClass(this);
       this.ready = true;
       this.emit('ready');
+
+      // Final check right before enqueue - connection may have been destroyed
+      // after the ready event was emitted (e.g., if a listener called stop())
+      if (this.stopped) {
+        return;
+      }
 
       this.connection._protocol._enqueue(
         new this.BinlogClass(binlogHandler)
@@ -299,6 +318,7 @@ ZongJi.prototype.start = function(options = {}) {
 };
 
 ZongJi.prototype.stop = function() {
+  this.stopped = true;
   // Binary log connection does not end with destroy()
   this.connection.destroy();
   this.ctrlConnection.query(
