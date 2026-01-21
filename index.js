@@ -383,6 +383,24 @@ ZongJi.prototype.start = function(options = {}) {
         return;
       }
 
+      // When compression is enabled, patch handlePacket to sync sequence ID.
+      // MySQL resets inner packet sequence IDs within compressed chunks for
+      // binlog streams, causing mysql2's sequence validation to emit warnings.
+      // By syncing the expected sequence ID to match the incoming packet, we
+      // prevent these harmless warnings. This is safe because binlog events
+      // track position independently (binlog file + position / GTID).
+      // Only applied when compression is enabled to preserve normal error
+      // detection for uncompressed connections.
+      if (this.connection.config && this.connection.config.compress) {
+        const originalHandlePacket = this.connection.handlePacket.bind(this.connection);
+        this.connection.handlePacket = function(packet) {
+          if (packet && typeof packet.sequenceId !== 'undefined') {
+            this.sequenceId = packet.sequenceId;
+          }
+          return originalHandlePacket(packet);
+        };
+      }
+
       this.connection.addCommand(new this.BinlogClass(binlogHandler));
     })
     .catch(err => {

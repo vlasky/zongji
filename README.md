@@ -6,9 +6,9 @@ It leverages [`mysql2`](https://github.com/sidorares/node-mysql2) for connection
 
 # Latest Release
 
-ZongJi release versions since 0.5.0 only support Node.js version 18 and above.
+ZongJi release versions since 0.6.0 only support Node.js version 18 and above.
 
-Version 0.4.7 is the last release that supports Node.js version 4.x.
+Version 0.5.9 is the last release that supports Node.js versions below 18.
 
 ## Quick Start
 
