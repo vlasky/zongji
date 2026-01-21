@@ -1,4 +1,4 @@
-const mysql = require('@vlasky/mysql');
+const mysql = require('mysql2');
 const util = require('util');
 const EventEmitter = require('events').EventEmitter;
 const initBinlogClass = require('./lib/sequence/binlog');
@@ -17,6 +17,18 @@ const TableInfoQueryTemplate = `SELECT
 function ZongJi(dsn) {
   EventEmitter.call(this);
 
+  this._pendingErrors = [];
+  this.on('newListener', (event) => {
+    if (event !== 'error' || this._pendingErrors.length === 0) {
+      return;
+    }
+    const pending = this._pendingErrors.slice();
+    this._pendingErrors.length = 0;
+    process.nextTick(() => {
+      pending.forEach(err => this.emit('error', err));
+    });
+  });
+
   this._options({});
   this._filters({});
   this.ctrlCallbacks = [];
@@ -25,7 +37,10 @@ function ZongJi(dsn) {
   this.stopped = false;
   this.useChecksum = false;
 
-  this._establishConnection(dsn);
+  this._dsn = dsn;
+  this.ctrlConnection = null;
+  this.connection = null;
+  this.ctrlConnectionOwner = false;
 }
 
 util.inherits(ZongJi, EventEmitter);
@@ -33,9 +48,15 @@ util.inherits(ZongJi, EventEmitter);
 // dsn - can be one instance of Connection or Pool / object / url string
 ZongJi.prototype._establishConnection = function(dsn) {
   const createConnection = (options) => {
+    const emitError = (err) => {
+      if (this.listenerCount('error') === 0) {
+        this._pendingErrors.push(err);
+        return;
+      }
+      this.emit('error', err);
+    };
     let connection = mysql.createConnection(options);
-    connection.on('error', this.emit.bind(this, 'error'));
-    connection.on('unhandledError', this.emit.bind(this, 'error'));
+    connection.on('error', emitError);
     // don't need to call connection.connect() here
     // we use implicitly established connection
     // see https://github.com/mysqljs/mysql#establishing-connections
@@ -44,13 +65,20 @@ ZongJi.prototype._establishConnection = function(dsn) {
 
   const configFunc = ConnectionConfigMap[dsn.constructor.name];
   let binlogDsn;
+  const sanitizeConnectionOptions = (options) => {
+    if (!options) return options;
+    const cleaned = Object.assign({}, options);
+    delete cleaned.maxPacketSize;
+    delete cleaned.clientFlags;
+    return cleaned;
+  };
 
   if (typeof dsn === 'object' && configFunc) {
     // dsn is a pool or connection object
     let conn = dsn; // reuse as ctrlConnection
     this.ctrlConnection = conn;
     this.ctrlConnectionOwner = false;
-    binlogDsn = Object.assign({}, configFunc(conn));
+    binlogDsn = sanitizeConnectionOptions(configFunc(conn));
   }
 
   if (!binlogDsn) {
@@ -67,17 +95,39 @@ ZongJi.prototype._isChecksumEnabled = function(next) {
   const SelectChecksumParamSql = 'select @@GLOBAL.binlog_checksum as checksum';
   const SetChecksumSql = 'set @master_binlog_checksum=@@global.binlog_checksum';
 
+  let done = false;
+  const finish = (err, enabled) => {
+    if (done) return;
+    done = true;
+    next(err, enabled);
+  };
+
+  const isConnectionReady = (conn) => {
+    return conn &&
+      conn.state !== 'disconnected' &&
+      !conn._fatalError &&
+      !conn._protocolError &&
+      !conn._closing;
+  };
+
   const query = (conn, sql) => {
+    if (!isConnectionReady(conn)) {
+      return Promise.resolve(null);
+    }
     return new Promise(
       (resolve, reject) => {
-        conn.query(sql, (err, result) => {
+        try {
+          conn.query(sql, (err, result) => {
           if (err) {
             reject(err);
           }
           else {
             resolve(result);
           }
-        });
+          });
+        } catch (err) {
+          reject(err);
+        }
       }
     );
   };
@@ -86,6 +136,10 @@ ZongJi.prototype._isChecksumEnabled = function(next) {
 
   query(this.ctrlConnection, SelectChecksumParamSql)
     .then(rows => {
+      if (!rows) {
+        checksumEnabled = false;
+        return null;
+      }
       if (rows[0].checksum === 'NONE') {
         checksumEnabled = false;
         return query(this.connection, 'SELECT 1');
@@ -102,11 +156,14 @@ ZongJi.prototype._isChecksumEnabled = function(next) {
         return query(this.connection, 'SELECT 1');
       }
       else {
-        next(err);
+        return finish(err);
       }
     })
     .then(() => {
-      next(null, checksumEnabled);
+      finish(null, checksumEnabled);
+    })
+    .catch(err => {
+      finish(err);
     });
 };
 
@@ -126,7 +183,16 @@ ZongJi.prototype._fetchTableInfo = function(tableMapEvent, next) {
   const sql = util.format(TableInfoQueryTemplate,
     tableMapEvent.schemaName, tableMapEvent.tableName);
 
-  this.ctrlConnection.query(sql, (err, rows) => {
+  if (!this.ctrlConnection ||
+      this.ctrlConnection.state === 'disconnected' ||
+      this.ctrlConnection._fatalError ||
+      this.ctrlConnection._protocolError ||
+      this.ctrlConnection._closing) {
+    return;
+  }
+
+  try {
+    this.ctrlConnection.query(sql, (err, rows) => {
     if (err) {
       // Errors should be emitted
       this.emit('error', err);
@@ -151,7 +217,10 @@ ZongJi.prototype._fetchTableInfo = function(tableMapEvent, next) {
     };
 
     next();
-  });
+    });
+  } catch (err) {
+    this.emit('error', err);
+  }
 };
 
 // #_options will reset all the options.
@@ -215,6 +284,10 @@ ZongJi.prototype.start = function(options = {}) {
   }
 
   this.stopped = false;
+
+  if (!this.connection || !this.ctrlConnection) {
+    this._establishConnection(this._dsn);
+  }
 
   this._options(options);
   this._filters(options);
@@ -307,9 +380,7 @@ ZongJi.prototype.start = function(options = {}) {
         return;
       }
 
-      this.connection._protocol._enqueue(
-        new this.BinlogClass(binlogHandler)
-      );
+      this.connection.addCommand(new this.BinlogClass(binlogHandler));
     })
     .catch(err => {
       this.emit('error', err);
@@ -319,17 +390,57 @@ ZongJi.prototype.start = function(options = {}) {
 
 ZongJi.prototype.stop = function() {
   this.stopped = true;
+
+  if (!this.connection && !this.ctrlConnection) {
+    this.emit('stopped');
+    return;
+  }
+
   // Binary log connection does not end with destroy()
-  this.connection.destroy();
-  this.ctrlConnection.query(
-    'KILL ' + this.connection.threadId,
-    () => {
-      if (this.ctrlConnectionOwner) {
-        this.ctrlConnection.destroy();
-      }
-      this.emit('stopped');
+  if (this.connection) {
+    this.connection.destroy();
+    if (this.connection.stream && typeof this.connection.stream.unref === 'function') {
+      this.connection.stream.unref();
     }
-  );
+  }
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (this.ctrlConnectionOwner) {
+      this.ctrlConnection.destroy();
+      if (this.ctrlConnection.stream && typeof this.ctrlConnection.stream.unref === 'function') {
+        this.ctrlConnection.stream.unref();
+      }
+    }
+    this.emit('stopped');
+  };
+
+  if (!this.ctrlConnection ||
+      this.ctrlConnection.state === 'disconnected' ||
+      this.ctrlConnection._fatalError ||
+      this.ctrlConnection._protocolError ||
+      this.ctrlConnection._closing) {
+    return finish();
+  }
+
+  if (!this.connection || !this.connection.threadId) {
+    return finish();
+  }
+
+  const killTimeout = setTimeout(finish, 1000);
+  try {
+    this.ctrlConnection.query(
+      'KILL ' + this.connection.threadId,
+      () => {
+        clearTimeout(killTimeout);
+        finish();
+      }
+    );
+  } catch {
+    clearTimeout(killTimeout);
+    finish();
+  }
 };
 
 // It includes every events by default.

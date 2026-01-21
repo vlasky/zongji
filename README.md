@@ -2,15 +2,11 @@ A MySQL 8.0-compatible fork of ZongJi - a MySQL binlog listener for Node.js, [or
 
 [@vlasky/zongji](https://github.com/vlasky/zongji) has been tested working with MySQL 5.5, 5.6, 5.7 and 8.0.
 
-It leverages [`@vlasky/mysql`](https://github.com/vlasky/mysql), a fork of [`mysql`](https://github.com/mysqljs/mysql) with the following enhancements:
-
-* Support for authentication using the caching_sha2_password plugin, the new default authentication method in MySQL 8.0
-* Partial support for the MySQL compressed protocol (reads compressed data sent by server)
-* Optional sending of keepalive probe packets to check the state of the connection to the MySQL server and help keep the connection open when the network socket is idle
+It leverages [`mysql2`](https://github.com/sidorares/node-mysql2) for connections and authentication, while using zongji's binlog parsing and event pipeline.
 
 # Latest Release
 
-ZongJi release versions since 0.5.0 only support Node.js version 8 and above.
+ZongJi release versions since 0.5.0 only support Node.js version 18 and above.
 
 Version 0.4.7 is the last release that supports Node.js version 4.x.
 
@@ -30,11 +26,22 @@ zongji.start({
 });
 ```
 
+### GTID example
+
+```javascript
+zongji.on('binlog', function(evt) {
+  const type = evt.getTypeName();
+  if (type === 'Gtid' || type === 'AnonymousGtid') {
+    console.log('GTID:', evt.gtid, 'SID:', evt.sid, 'GNO:', evt.gno);
+  }
+});
+```
+
 For a complete implementation see [`example.js`](example.js)...
 
 ## Installation
 
-* Requires Node.js v8+
+* Requires Node.js v18+
 
   ```bash
   $ npm install @vlasky/zongji
@@ -66,12 +73,12 @@ For a complete implementation see [`example.js`](example.js)...
 
 The `ZongJi` constructor accepts one argument of either:
 
-* An object containing MySQL connection details in the same format as used by [package mysql](https://npm.im/mysql)
-* Or, a [mysql](https://npm.im/mysql) `Connection` or `Pool` object that will be used for querying column information.
+* An object containing MySQL connection details in the same format as used by [package mysql2](https://npm.im/mysql2)
+* Or, a [mysql2](https://npm.im/mysql2) `Connection` or `Pool` object that will be used for querying column information.
 
 If a `Connection` or `Pool` object is passed to the constructor, it will not be destroyed/ended by Zongji's `stop()` method.
 
-If there is a `dateStrings` `mysql` configuration option in the connection details or connection, `ZongJi` will follow it.
+The `dateStrings` and `timezone` configuration options from the connection details are respected for date/time value handling.
 
 Each instance includes the following methods:
 
@@ -116,6 +123,9 @@ Event name  | Description
 `rotate`    | [New Binlog file](https://dev.mysql.com/doc/internals/en/rotate-event.html) Not required to be included to rotate to new files, but it is required to be included in order to keep the `filename` and `position` properties updated with current values for [graceful restarting on errors](https://gist.github.com/numtel/5b37b2a7f47b380c1a099596c6f3db2f).
 `format`    | [Format Description](https://dev.mysql.com/doc/internals/en/format-description-event.html)
 `xid`       | [Transaction ID](https://dev.mysql.com/doc/internals/en/xid-event.html)
+`gtid`      | GTID event with `gtid`, `sid`, `gno` properties
+`anonymousgtid` | Anonymous GTID event (same shape as `gtid`)
+`previousgtids` | Previous GTIDs event with `gtidSet` and `sids`
 `tablemap`  | Before any row event (must be included for any other row events)
 `writerows` | Rows inserted, row data array available as `rows` property on event object
 `updaterows` | Rows changed, row data array available as `rows` property on event object
@@ -132,20 +142,23 @@ Name   | Description
 
 ## Important Notes
 
-* :star2: [All types allowed by `mysql`](https://github.com/mysqljs/mysql#type-casting) are supported by this package.
+* :star2: All MySQL column types are supported, with type casting similar to [mysql2](https://github.com/sidorares/node-mysql2).
 * :speak_no_evil: 64-bit integer is supported via package big-integer(see #108). If an integer is within the safe range of JS number (-2^53, 2^53), a Number object will returned, otherwise, will return as String.
 * :point_right: `TRUNCATE` statement does not cause corresponding `DeleteRows` event. Use unqualified `DELETE FROM` for same effect.
 * When using fractional seconds with `DATETIME` and `TIMESTAMP` data types in MySQL > 5.6.4, only millisecond precision is available due to the limit of Javascript's `Date` object.
+* Binlog checksums (e.g. `CRC32`) are supported; zongji will detect and ignore the checksum bytes at the end of row events.
 
 ## Run Tests
 
-* install [Docker](https://www.docker.com/community-edition#download)
-* run `docker-compose up` and then `./docker-test.sh`
+* Install [Docker](https://www.docker.com/community-edition#download)
+* Run `docker-compose up -d` to start MySQL containers
+* Run `npm test` to execute the test suite
 
 ## References
 
 The following resources provided valuable information that greatly assisted in creating ZongJi:
 
+* https://github.com/sidorares/node-mysql2
 * https://github.com/mysqljs/mysql
 * https://github.com/felixge/faster-than-c/
 * https://web.archive.org/web/20130117004733/https://intuitive-search.blogspot.co.uk/2011/07/binary-log-api-and-replication-listener.html

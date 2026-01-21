@@ -42,7 +42,7 @@ testDb.requireVersion('5.6.2', () => {
     test.test('update a record', test => {
       const events = [];
       const zongji = new ZongJi(settings.connection);
-      test.tearDown(() => zongji.stop());
+      test.teardown(() => zongji.stop());
 
       zongji.on('ready', () => {
         testDb.execute([
@@ -113,7 +113,7 @@ testDb.requireVersion('5.6.2', () => {
     test.test('update a record', test => {
       const events = [];
       const zongji = new ZongJi(settings.connection);
-      test.tearDown(() => zongji.stop());
+      test.teardown(() => zongji.stop());
 
       zongji.on('ready', () => {
         testDb.execute([

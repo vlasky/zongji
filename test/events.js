@@ -8,8 +8,8 @@ const settings = require('./settings/mysql');
 const checkTableMatches = function(tableName) {
   return function(test, event) {
     const tableDetails = event.tableMap[event.tableId];
-    test.strictEqual(tableDetails.parentSchema, testDb.SCHEMA_NAME);
-    test.strictEqual(tableDetails.tableName, tableName);
+    test.equal(tableDetails.parentSchema, testDb.SCHEMA_NAME);
+    test.equal(tableDetails.tableName, tableName);
   };
 };
 
@@ -52,7 +52,7 @@ tap.test('Binlog option startAtEnd', test => {
     const events = [];
 
     const zongji = new ZongJi(settings.connection);
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     zongji.on('binlog', evt => events.push(evt));
     zongji.start({
@@ -103,7 +103,7 @@ tap.test('Class constructor', test => {
   });
 
   function run(test, zongji) {
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     const events = [];
     zongji.on('binlog', evt => events.push(evt));
@@ -130,7 +130,7 @@ tap.test('Class constructor', test => {
     });
   }
 
-  const mysql = require('@vlasky/mysql');
+  const mysql = require('mysql2');
 
   test.test('pass a mysql connection instance', test => {
     const conn = mysql.createConnection(settings.connection);
@@ -140,7 +140,7 @@ tap.test('Class constructor', test => {
   });
 
   test.test('pass a mysql pool', test => {
-    const pool = mysql.createConnection(settings.connection);
+    const pool = mysql.createPool(settings.connection);
     const zongji = new ZongJi(pool);
     zongji.on('stopped', () => pool.end());
     run(test, zongji);
@@ -168,7 +168,7 @@ tap.test('Write events', test => {
   test.test('write a record', test => {
     const events = [];
     const zongji = new ZongJi(settings.connection);
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     zongji.start({
       startAtEnd: true,
@@ -208,7 +208,7 @@ tap.test('Write events', test => {
   test.test('update a record', test => {
     const events = [];
     const zongji = new ZongJi(settings.connection);
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     zongji.start({
       startAtEnd: true,
@@ -248,7 +248,7 @@ tap.test('Write events', test => {
   test.test('delete a record', test => {
     const events = [];
     const zongji = new ZongJi(settings.connection);
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     zongji.start({
       startAtEnd: true,
@@ -307,7 +307,7 @@ tap.test('Intvar / Query event', test => {
   test.test('begin', test => {
     const events = [];
     const zongji = new ZongJi(settings.connection);
-    test.tearDown(() => zongji.stop());
+    test.teardown(() => zongji.stop());
 
     zongji.on('binlog', event => {
       if (event.getTypeName() === 'Query' && event.query === 'BEGIN') {
@@ -360,7 +360,7 @@ tap.test('With many columns', test => {
 
   const zongji = new ZongJi(settings.connection);
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
   zongji.on('binlog', evt => events.push(evt));
   zongji.start({
     startAtEnd: true,
@@ -408,6 +408,178 @@ tap.test('With many columns', test => {
         { _type: 'TableMap' },
         { rows: result[result.length - 1], _type: 'WriteRows' }
       ], 1, test.end);
+    });
+  });
+});
+
+tap.test('Rotate event on flush logs', test => {
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  let initialLogName;
+  let rotateReceived = false;
+  let finished = false;
+  let timeoutId;
+
+  zongji.start({
+    startAtEnd: true,
+    serverId: testDb.serverId(),
+    includeEvents: ['rotate'],
+  });
+
+  zongji.on('binlog', event => {
+    if (finished) return;
+    if (event.getTypeName() !== 'Rotate') return;
+    if (!initialLogName) return;
+    if (event.binlogName === initialLogName) return;
+    rotateReceived = true;
+    test.ok(event.position > 0);
+    test.ok(event.binlogName.indexOf(initialLogName) === -1);
+    finished = true;
+    clearTimeout(timeoutId);
+    test.end();
+  });
+
+  zongji.on('ready', () => {
+    testDb.execute(['SHOW BINARY LOGS'], (err, results) => {
+      if (err) {
+        return test.fail(err);
+      }
+      const rows = results[results.length - 1];
+      initialLogName = rows[rows.length - 1].Log_name;
+      testDb.execute(['FLUSH LOGS'], (flushErr) => {
+        if (flushErr) {
+          return test.fail(flushErr);
+        }
+        timeoutId = setTimeout(() => {
+          if (!rotateReceived) {
+            test.fail('Rotate event not received');
+            finished = true;
+            test.end();
+          }
+        }, 2000);
+      });
+    });
+  });
+});
+
+tap.test('Binlog checksum enabled', test => {
+  const TEST_TABLE = 'checksum_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  let originalChecksum;
+
+  const setupQueries = [
+    'SELECT @@GLOBAL.binlog_checksum AS checksum',
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ];
+
+  testDb.execute(setupQueries, (err, results) => {
+    if (err) {
+      return test.fail(err);
+    }
+    originalChecksum = results[0][0].checksum;
+    testDb.execute(['SET GLOBAL binlog_checksum = \'CRC32\''], (setErr) => {
+      if (setErr) {
+        return test.fail(setErr);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+        });
+      });
+
+      zongji.on('binlog', event => {
+        if (event.getTypeName() !== 'WriteRows') {
+          return;
+        }
+        test.same(event.rows, [{ col: 1 }]);
+        testDb.execute([`SET GLOBAL binlog_checksum = '${originalChecksum}'`], (resetErr) => {
+          if (resetErr) {
+            return test.fail(resetErr);
+          }
+          test.end();
+        });
+      });
+    });
+  });
+});
+
+tap.test('GTID events', test => {
+  const TEST_TABLE = 'gtid_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const ensureGtidQueries = [
+    'SET GLOBAL enforce_gtid_consistency = ON',
+    'SET GLOBAL gtid_mode = OFF_PERMISSIVE',
+    'SET GLOBAL gtid_mode = ON_PERMISSIVE',
+    'SET GLOBAL gtid_mode = ON',
+  ];
+
+  testDb.execute([
+    'SELECT @@GLOBAL.gtid_mode AS gtid_mode',
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], (err, results) => {
+    if (err) {
+      return test.fail(err);
+    }
+    const gtidMode = results[0][0].gtid_mode;
+    const enableGtid = gtidMode === 'ON' ? [] : ensureGtidQueries;
+
+    const runTest = () => {
+
+      let seenGtid = false;
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['gtid', 'anonymousgtid', 'previousgtids', 'tablemap', 'writerows'],
+      });
+
+      zongji.on('binlog', event => {
+        if (event.getTypeName() === 'Gtid' || event.getTypeName() === 'AnonymousGtid') {
+          seenGtid = true;
+        }
+        if (event.getTypeName() === 'WriteRows' && seenGtid) {
+          test.ok(seenGtid);
+          test.end();
+        }
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+        });
+      });
+    };
+
+    if (enableGtid.length === 0) {
+      return runTest();
+    }
+
+    testDb.execute(enableGtid, enableErr => {
+      if (enableErr) {
+        return test.fail(enableErr);
+      }
+      runTest();
     });
   });
 });

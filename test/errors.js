@@ -11,12 +11,12 @@ tap.test('Connect to an invalid host', test => {
     password: 'wrongpass'
   });
 
-  zongji.on('error', function(error) {
+  zongji.once('error', function(error) {
     test.ok(['ENOTFOUND', 'ETIMEDOUT'].indexOf(error.code) !== -1);
     test.end();
   });
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
   zongji.start();
 });
 
@@ -113,6 +113,29 @@ tap.test('Events come through in sequence', test => {
 
   test.test('when reconnect', test => {
     const result = [];
+    let first;
+    let second;
+    let ended = false;
+    let pendingStops = 0;
+    let endCalled = false;
+
+    function finalize() {
+      if (endCalled) return;
+      endCalled = true;
+      test.end();
+    }
+
+    function stopInstance(instance) {
+      if (!instance) return;
+      pendingStops += 1;
+      instance.once('stopped', () => {
+        pendingStops -= 1;
+        if (ended && pendingStops === 0) {
+          finalize();
+        }
+      });
+      instance.stop();
+    }
 
     function startPeriodicallyWriting() {
       let sequences = Array.from(
@@ -151,34 +174,43 @@ tap.test('Events come through in sequence', test => {
         }
 
         if (result.length === UPDATE_COUNT) {
+          ended = true;
           test.strictSame(
             result,
             Array.from({length: UPDATE_COUNT}, (_, i) => i)
           );
-          test.end();
+          stopInstance(first);
+          stopInstance(second);
+          if (pendingStops === 0) {
+            finalize();
+          }
         }
       });
 
       return zongji;
     }
 
-    let first = newInstance({
+    first = newInstance({
       serverId: testDb.serverId(),
       startAtEnd: true,
+    });
+    test.teardown(() => {
+      ended = true;
+      stopInstance(first);
+      stopInstance(second);
     });
 
     first.on('ready', () => {
       startPeriodicallyWriting();
 
       first.on('stopped', () => {
+        if (ended) return;
         // Start new ZongJi instance where the previous was when stopped
-        let second = newInstance({
+        second = newInstance({
           serverId: testDb.serverId(),
           filename: first.get('filename'),
           position: first.get('position'),
         });
-
-        test.tearDown(() => second.stop());
       });
       setTimeout(() => first.stop(), NEW_INST_TIMEOUT);
     });

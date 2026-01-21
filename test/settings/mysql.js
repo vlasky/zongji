@@ -7,7 +7,13 @@ module.exports = {
     password : 'numtel',
     charset  : 'utf8mb4_unicode_ci',
     port     : process.env.TEST_MYSQL_PORT,
-    dateStrings : process.env.TEST_DATE_STRINGS === 'true',
+    timezone : process.env.TEST_TIMEZONE || 'Z',
+    jsonStrings: process.env.TEST_JSON_STRINGS === 'false' ? false : true,
+    dateStrings : (() => {
+      if (!process.env.TEST_DATE_STRINGS) return ['TIMESTAMP'];
+      if (process.env.TEST_DATE_STRINGS === 'true') return true;
+      return process.env.TEST_DATE_STRINGS.split(',');
+    })(),
     database: 'zongji_test',
     // debug: true
   },

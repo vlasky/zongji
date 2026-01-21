@@ -43,7 +43,7 @@ function defineTypeTest(name, fields, testRows, customTest) {
       const errorLog = [];
 
       const zongji = new ZongJi(settings.connection);
-      test.tearDown(() => zongji.stop());
+      test.teardown(() => zongji.stop());
 
       zongji.start({
         includeEvents: ['tablemap', 'writerows', 'updaterows', 'deleterows'],
@@ -86,7 +86,7 @@ function defineTypeTest(name, fields, testRows, customTest) {
             if (customTest) {
               customTest.bind(selectResult)(test, { rows: binlogRows });
             } else {
-              test.deepEqual(selectResult, binlogRows);
+              test.same(selectResult, binlogRows);
             }
 
             test.end();
@@ -215,8 +215,8 @@ defineTypeTest('blob', [
 defineTypeTest('geometry', [
   'GEOMETRY',
 ], [
-  ["GeomFromText('POINT(1 1)')"],
-  ["GeomFromText('POLYGON((0 0,10 0,10 10,0 10,0 0),(5 5,7 5,7 7,5 7, 5 5))')"]
+  ["ST_GeomFromText('POINT(1 1)')"],
+  ["ST_GeomFromText('POLYGON((0 0,10 0,10 10,0 10,0 0),(5 5,7 5,7 7,5 7, 5 5))')"]
 ]);
 
 defineTypeTest('time_no_fraction', [
@@ -455,29 +455,29 @@ testDb.requireVersion('5.7.8', () => {
     // JSON from MySQL client has different whitespace than JSON.stringify
     // Therefore, parse and perform deep equality
     event.rows.forEach((row, index) => {
-      // test.deepEqual does not work when comparison objects exceed 65536 bytes
+      // test.same does not work when comparison objects exceed 65536 bytes
       // Perform alternative assertions for these large cases
       const expected = JSON.parse(this[index].col0);
       const actual = JSON.parse(row.col0);
       if (this[index].col0.length > 65536) {
         // Large cases are either array or object
         if (expected instanceof Array) {
-          test.strictEqual(expected.length, actual.length);
+          test.equal(expected.length, actual.length);
           for (let i = 0; i < expected.length; i++) {
-            test.deepEqual(expected[i], actual[i]);
+            test.same(expected[i], actual[i]);
           }
         } else {
           const expectedKeys = Object.keys(expected);
           const actualKeys = Object.keys(actual);
-          test.strictEqual(expectedKeys.length, actualKeys.length);
-          test.deepEqual(expectedKeys, actualKeys);
+          test.equal(expectedKeys.length, actualKeys.length);
+          test.same(expectedKeys, actualKeys);
           for (let j = 0; j < expectedKeys.length; j++) {
-            test.deepEqual(expected[expectedKeys[j]], actual[expectedKeys[j]]);
+            test.same(expected[expectedKeys[j]], actual[expectedKeys[j]]);
           }
         }
       } else {
         // Comparison objects are smaller than 65536 bytes
-        test.deepEqual(expected, actual);
+        test.same(expected, actual);
       }
     });
   });

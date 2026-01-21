@@ -16,6 +16,7 @@ tap.test('Initialise testing db', test => {
 
 tap.test('Unit test', test => {
   const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
 
     test.test('Check that exclude overrides include', test => {
       zongji._filters({
@@ -88,7 +89,7 @@ tap.test('Exclue all the schema', test => {
   zongji.on('binlog', event => eventLog.push(event));
   zongji.on('error', error => errorLog.push(error));
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
 
   // Set includeSchema to not include anything, recieve no row events
   // Ensure that filters are applied
@@ -113,6 +114,9 @@ tap.test('Exclue all the schema', test => {
 
       // Give 1 second to see if any events are emitted, they should not be!
       setTimeout(() => {
+        if (errorLog.length > 0) {
+          test.comment(errorLog.map(err => err && err.message ? err.message : String(err)).join('; '));
+        }
         test.equal(eventLog.length, 0);
         test.equal(errorLog.length, 0);
         test.end();
@@ -139,7 +143,7 @@ tap.test('Change filter when ZongJi is running', test => {
     includeSchema: includeSchema
   });
 
-  test.tearDown(() => zongji.stop());
+  test.teardown(() => zongji.stop());
 
   testDb.execute(
     [
