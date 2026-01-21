@@ -329,6 +329,9 @@ ZongJi.prototype.start = function(options = {}) {
       return this.emit('error', error);
     }
 
+    // Ignore events if connection has been stopped
+    if (this.stopped || !this.connection) return;
+
     // Do not emit events that have been filtered out
     if (event === undefined || event._filtered === true) return;
 
@@ -336,12 +339,13 @@ ZongJi.prototype.start = function(options = {}) {
       case 'TableMap': {
         const tableMap = this.tableMap[event.tableId];
         if (!tableMap || tableMap.tableName !== event.tableName || tableMap.columns.length !== event.columnCount) {
+          if (!this.connection) return;
           this.connection.pause();
           this._fetchTableInfo(event, () => {
             // merge the column info with metadata
             event.updateColumnInfo();
             this.emit('binlog', event);
-            this.connection.resume();
+            if (this.connection) this.connection.resume();
           });
           return;
         }
@@ -374,8 +378,7 @@ ZongJi.prototype.start = function(options = {}) {
       this.ready = true;
       this.emit('ready');
 
-      // Final check right before enqueue - connection may have been destroyed
-      // after the ready event was emitted (e.g., if a listener called stop())
+      // Final check right before addCommand - connection may have been destroyed
       if (this.stopped) {
         return;
       }
@@ -390,6 +393,7 @@ ZongJi.prototype.start = function(options = {}) {
 
 ZongJi.prototype.stop = function() {
   this.stopped = true;
+  this.ready = false;
 
   if (!this.connection && !this.ctrlConnection) {
     this.emit('stopped');
@@ -397,21 +401,25 @@ ZongJi.prototype.stop = function() {
   }
 
   // Binary log connection does not end with destroy()
+  let connectionThreadId = null;
   if (this.connection) {
+    connectionThreadId = this.connection.threadId;
     this.connection.destroy();
     if (this.connection.stream && typeof this.connection.stream.unref === 'function') {
       this.connection.stream.unref();
     }
+    this.connection = null;
   }
   let finished = false;
   const finish = () => {
     if (finished) return;
     finished = true;
-    if (this.ctrlConnectionOwner) {
+    if (this.ctrlConnectionOwner && this.ctrlConnection) {
       this.ctrlConnection.destroy();
       if (this.ctrlConnection.stream && typeof this.ctrlConnection.stream.unref === 'function') {
         this.ctrlConnection.stream.unref();
       }
+      this.ctrlConnection = null;
     }
     this.emit('stopped');
   };
@@ -421,17 +429,18 @@ ZongJi.prototype.stop = function() {
       this.ctrlConnection._fatalError ||
       this.ctrlConnection._protocolError ||
       this.ctrlConnection._closing) {
+    this.ctrlConnection = null;
     return finish();
   }
 
-  if (!this.connection || !this.connection.threadId) {
+  if (!connectionThreadId) {
     return finish();
   }
 
   const killTimeout = setTimeout(finish, 1000);
   try {
     this.ctrlConnection.query(
-      'KILL ' + this.connection.threadId,
+      'KILL ' + connectionThreadId,
       () => {
         clearTimeout(killTimeout);
         finish();
