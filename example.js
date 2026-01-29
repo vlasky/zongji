@@ -1,5 +1,5 @@
 // Client code
-const ZongJi = require('./');
+import ZongJi from './index.js';
 
 const zongji = new ZongJi({
   host     : 'localhost',

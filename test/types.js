@@ -1,8 +1,8 @@
-const tap = require('tap');
-const ZongJi = require('../');
-const expectEvents = require('./helpers/expectEvents');
-const testDb = require('./helpers');
-const settings = require('./settings/mysql');
+import tap from 'tap';
+import ZongJi from '../index.js';
+import expectEvents from './helpers/expectEvents.js';
+import * as testDb from './helpers/index.js';
+import settings from './settings/mysql.js';
 const strRepeat = testDb.strRepeat;
 
 
@@ -28,14 +28,13 @@ function defineTypeTest(name, fields, testRows, customTest) {
       `SELECT * FROM ${TEST_TABLE}`,
     ]);
 
-    tap.test('Initialise testing db', test => {
-      testDb.init(err => {
-        if (err) {
-          return test.fail(err);
-        }
-
-        test.end();
-      });
+    tap.test('Initialise testing db', async test => {
+      try {
+        await testDb.initAsync();
+        test.pass('database initialized');
+      } catch (err) {
+        test.fail(err);
+      }
     });
 
     tap.test(name, test => {

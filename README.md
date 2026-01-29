@@ -1,19 +1,21 @@
-A MySQL 8.0-compatible fork of ZongJi - a MySQL binlog listener for Node.js, [originally created by Nevill Dutt](https://github.com/nevill/zongji).
+MySQL binlog-based change data capture (CDC) for Node.js, [originally created by Nevill Dutt](https://github.com/nevill/zongji).
 
-[@vlasky/zongji](https://github.com/vlasky/zongji) has been tested working with MySQL 5.5, 5.6, 5.7 and 8.0.
+[@vlasky/zongji](https://github.com/vlasky/zongji) has been tested working with MySQL 5.7, 8.0 and 8.4.
 
 It leverages [`mysql2`](https://github.com/sidorares/node-mysql2) for connections and authentication, while using zongji's binlog parsing and event pipeline.
 
 # Latest Release
 
-ZongJi release versions since 0.6.0 only support Node.js version 18 and above.
+Version 0.6.0 is a major modernisation that rewrites the codebase to use the mysql2 module, ES6 syntax and ESM exports, adds TypeScript definitions, and adds official support for MySQL 8.4.
 
-Version 0.5.9 is the last release that supports Node.js versions below 18.
+Version 0.5.9 is the last release that supports Node.js versions below 18 and CommonJS.
 
 ## Quick Start
 
 ```javascript
-let zongji = new ZongJi({ /* ... MySQL Connection Settings ... */ });
+import ZongJi from '@vlasky/zongji';
+
+const zongji = new ZongJi({ /* ... MySQL Connection Settings ... */ });
 
 // Each change to the replication log results in an event
 zongji.on('binlog', function(evt) {
@@ -37,6 +39,14 @@ zongji.on('binlog', function(evt) {
 });
 ```
 
+### TypeScript
+
+TypeScript definitions are included:
+
+```typescript
+import ZongJi from '@vlasky/zongji';
+```
+
 For a complete implementation see [`example.js`](example.js)...
 
 ## Installation
@@ -48,7 +58,7 @@ For a complete implementation see [`example.js`](example.js)...
   ```
 
 * Enable MySQL binlog in `my.cnf`, restart MySQL server after making the changes.
-  > From [MySQL 5.6](https://dev.mysql.com/doc/refman/5.6/en/replication-options-binary-log.html), binlog checksum is enabled by default. Zongji can work with it, but it doesn't really verify it.
+  > Binlog checksum is enabled by default in all supported MySQL versions. Zongji can work with it, but it doesn't verify the checksum.
 
   ```
   # Must be unique integer from 1-2^32
@@ -92,7 +102,7 @@ Some events can be emitted in different phases:
 
 Event Name | Description
 -----------|------------------------
-`ready`    | This event is occurred right after ZongJi successfully established a connection, setup slave status, and set binlog position.
+`ready`    | This event occurs right after ZongJi successfully establishes a connection, sets up replica (slave) status, and sets the binlog position.
 `binlog`   | Once a binlog is received and passes the filter, it will bubble up with this event.
 `error`    | Every error will be caught by this event.
 `stopped`  | Emitted when ZongJi connection is stopped (ZongJi#stop is called).
@@ -145,7 +155,7 @@ Name   | Description
 * :star2: All MySQL column types are supported, with type casting similar to [mysql2](https://github.com/sidorares/node-mysql2).
 * :speak_no_evil: 64-bit integer is supported via package big-integer(see #108). If an integer is within the safe range of JS number (-2^53, 2^53), a Number object will returned, otherwise, will return as String.
 * :point_right: `TRUNCATE` statement does not cause corresponding `DeleteRows` event. Use unqualified `DELETE FROM` for same effect.
-* When using fractional seconds with `DATETIME` and `TIMESTAMP` data types in MySQL > 5.6.4, only millisecond precision is available due to the limit of Javascript's `Date` object.
+* When using fractional seconds with `DATETIME` and `TIMESTAMP` data types, only millisecond precision is available due to the limit of Javascript's `Date` object.
 * Binlog checksums (e.g. `CRC32`) are supported; zongji will detect and ignore the checksum bytes at the end of row events.
 
 ## Run Tests
@@ -166,7 +176,7 @@ The following resources provided valuable information that greatly assisted in c
 * https://kkaefer.com/node-cpp-modules/
 * https://dev.mysql.com/doc/internals/en/replication-protocol.html
 * https://web.archive.org/web/20200201195450/https://www.cs.wichita.edu/~chang/lecture/cs742/program/how-mysql-c-api.html
-* https://github.com/jeremycole/mysql_binlog (Ruby implemenation of MySQL binlog parser)
+* https://github.com/jeremycole/mysql_binlog (Ruby implementation of MySQL binlog parser)
 * https://dev.mysql.com/doc/internals/en/date-and-time-data-type-representation.html
 
 ## License

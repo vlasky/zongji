@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "skipDefaultLibCheck": true,
+    "maxNodeModuleJsDepth": 0,
+    "types": ["node"]
+  },
+  "include": ["index.js", "index.d.ts", "lib/**/*.js"],
+  "exclude": ["node_modules", ".tap"]
+}

@@ -1,14 +1,18 @@
 {
   "name": "@vlasky/zongji",
   "version": "0.6.0",
-  "description": "A MySQL 8.0-compatible fork of ZongJi - a MySQL binlog listener for Node.js.",
+  "description": "MySQL binlog-based change data capture (CDC) for Node.js",
+  "type": "module",
   "main": "index.js",
+  "types": "index.d.ts",
   "directories": {
     "test": "test"
   },
   "scripts": {
+    "pretest": "bash scripts/start-mysql.sh",
     "test": "tap --bail --disable-coverage --jobs=1 test/*.js",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "checkjs": "tsc --project jsconfig.json"
   },
   "repository": {
     "type": "git",
@@ -40,6 +44,6 @@
   "dependencies": {
     "big-integer": "1.6.52",
     "iconv-lite": "0.7.2",
-    "mysql2": "^3.16.1"
+    "mysql2": "^3.17.1"
   }
 }

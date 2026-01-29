@@ -1,5 +1,5 @@
-const tap = require('tap');
-const getEventClass = require('./../lib/code_map').getEventClass;
+import tap from 'tap';
+import { getEventClass } from '../lib/code_map.js';
 
 tap.test('Codemap', test => {
   test.equal(getEventClass(2).name, 'Query');

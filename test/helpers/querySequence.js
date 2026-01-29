@@ -3,7 +3,7 @@
 // @param {boolean} debug - Print queries as they execute (optional)
 // @param {[string]} queries - Queries to execute, in order
 // @param {function} callback - Call when complete
-module.exports = function(connection, debug, queries, callback) {
+export default function querySequence(connection, debug, queries, callback) {
   if (debug instanceof Array) {
     callback = queries;
     queries = debug;
@@ -26,4 +26,4 @@ module.exports = function(connection, debug, queries, callback) {
     };
   });
   sequence[0]();
-};
+}

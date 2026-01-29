@@ -1,36 +1,61 @@
-const mysql = require('mysql2');
+import mysql from 'mysql2';
 
-const settings = require('../settings/mysql');
-const querySequence = require('./querySequence');
+import settings from '../settings/mysql.js';
+import querySequence from './querySequence.js';
 
-const SCHEMA_NAME = settings.connection.database;
+export const SCHEMA_NAME = settings.connection.database;
 
-exports.SCHEMA_NAME = SCHEMA_NAME;
-
-exports.init = function(done) {
+export function init(done) {
   const connObj = {...settings.connection};
   // database doesn't exist at this time
   delete connObj.database;
   const conn = mysql.createConnection(connObj);
 
-  querySequence(
-    conn,
-    [
-      'SET GLOBAL sql_mode = \'' + settings.sessionSqlMode + '\'',
-      `DROP DATABASE IF EXISTS ${SCHEMA_NAME}`,
-      `CREATE DATABASE ${SCHEMA_NAME}`,
-      `USE ${SCHEMA_NAME}`,
-      'RESET MASTER',
-      // 'SELECT VERSION() AS version'
-    ],
-    error => {
+  // First get the version to determine correct reset command
+  querySequence(conn, ['SELECT VERSION() AS version'], (err, results) => {
+    if (err) {
       conn.destroy();
-      done(error);
+      return done(err);
     }
-  );
-};
 
-exports.execute = function(queries, done) {
+    const ver = results[results.length - 1][0]
+      .version.split('-')[0]
+      .split('.')
+      .map(part => parseInt(part, 10));
+
+    // MySQL 8.4+ uses RESET BINARY LOGS AND GTIDS instead of RESET MASTER
+    const resetCommand = (ver[0] > 8 || (ver[0] === 8 && ver[1] >= 4))
+      ? 'RESET BINARY LOGS AND GTIDS'
+      : 'RESET MASTER';
+
+    querySequence(
+      conn,
+      [
+        'SET GLOBAL sql_mode = \'' + settings.sessionSqlMode + '\'',
+        `DROP DATABASE IF EXISTS ${SCHEMA_NAME}`,
+        `CREATE DATABASE ${SCHEMA_NAME}`,
+        `USE ${SCHEMA_NAME}`,
+        resetCommand,
+      ],
+      error => {
+        conn.destroy();
+        done(error);
+      }
+    );
+  });
+}
+
+// Promise-based version of init
+export function initAsync() {
+  return new Promise((resolve, reject) => {
+    init(err => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+export function execute(queries, done) {
   const conn = mysql.createConnection(settings.connection);
   querySequence(
     conn,
@@ -40,7 +65,17 @@ exports.execute = function(queries, done) {
       done(error, result);
     }
   );
-};
+}
+
+// Promise-based version of execute
+export function executeAsync(queries) {
+  return new Promise((resolve, reject) => {
+    execute(queries, (err, result) => {
+      if (err) reject(err);
+      else resolve(result);
+    });
+  });
+}
 
 const checkVersion = function(expected, actual) {
   const parts = expected.split('.').map(part => parseInt(part, 10));
@@ -53,7 +88,7 @@ const checkVersion = function(expected, actual) {
   return true;
 };
 
-exports.requireVersion = function(expected, done) {
+export function requireVersion(expected, done) {
   const connObj = {...settings.connection};
   // database doesn't exist at this time
   delete connObj.database;
@@ -74,15 +109,15 @@ exports.requireVersion = function(expected, done) {
       done();
     }
   });
-};
+}
 
 let id = 100;
-exports.serverId = function() {
+export function serverId() {
   id ++;
   return id;
-};
+}
 
-exports.strRepeat = function (pattern, count) {
+export function strRepeat(pattern, count) {
   if (count < 1) return '';
   let result = '';
   let pos = 0;
@@ -91,4 +126,4 @@ exports.strRepeat = function (pattern, count) {
     pos++;
   }
   return result;
-};
+}

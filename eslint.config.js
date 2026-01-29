@@ -1,23 +1,19 @@
-const js = require('@eslint/js');
+import js from '@eslint/js';
 
-module.exports = [
+export default [
+  { ignores: ['.tap/'] },
   js.configs.recommended,
   {
     languageOptions: {
-      ecmaVersion: 2020,
-      sourceType: 'script',
+      ecmaVersion: 2022,
+      sourceType: 'module',
       globals: {
         Buffer: 'readonly',
-        __dirname: 'readonly',
-        __filename: 'readonly',
         clearImmediate: 'readonly',
         clearInterval: 'readonly',
         clearTimeout: 'readonly',
         console: 'readonly',
-        exports: 'readonly',
-        module: 'readonly',
         process: 'readonly',
-        require: 'readonly',
         setImmediate: 'readonly',
         setInterval: 'readonly',
         setTimeout: 'readonly',

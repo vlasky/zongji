@@ -1,17 +1,17 @@
-const tap = require('tap');
+import tap from 'tap';
 
-const ZongJi = require('../');
-const testDb = require('./helpers');
-const expectEvents = require('./helpers/expectEvents');
-const settings = require('./settings/mysql');
+import ZongJi from '../index.js';
+import * as testDb from './helpers/index.js';
+import expectEvents from './helpers/expectEvents.js';
+import settings from './settings/mysql.js';
 
-tap.test('Initialise testing db', test => {
-  testDb.init(err => {
-    if (err) {
-      return test.threw(err);
-    }
-    test.end();
-  });
+tap.test('Initialise testing db', async test => {
+  try {
+    await testDb.initAsync();
+    test.pass('database initialized');
+  } catch (err) {
+    test.fail(err);
+  }
 });
 
 testDb.requireVersion('5.6.2', () => {

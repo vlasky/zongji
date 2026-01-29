@@ -1,9 +1,10 @@
-const tap = require('tap');
+import tap from 'tap';
+import mysql from 'mysql2';
 
-const ZongJi = require('../');
-const expectEvents = require('./helpers/expectEvents');
-const testDb = require('./helpers');
-const settings = require('./settings/mysql');
+import ZongJi from '../index.js';
+import expectEvents from './helpers/expectEvents.js';
+import * as testDb from './helpers/index.js';
+import settings from './settings/mysql.js';
 
 const checkTableMatches = function(tableName) {
   return function(test, event) {
@@ -22,13 +23,13 @@ const tableMapEvent = function(tableName) {
   };
 };
 
-tap.test('Initialise testing db', test => {
-  testDb.init(err => {
-    if (err) {
-      return test.threw(err);
-    }
-    test.end();
-  });
+tap.test('Initialise testing db', async test => {
+  try {
+    await testDb.initAsync();
+    test.pass('database initialized');
+  } catch (err) {
+    test.fail(err);
+  }
 });
 
 tap.test('Binlog option startAtEnd', test => {
@@ -36,7 +37,7 @@ tap.test('Binlog option startAtEnd', test => {
 
   test.test(`prepare new table ${TEST_TABLE}`, test => {
     testDb.execute([
-      'FLUSH LOGS', // Ensure ZongJi perserveres through a rotation event
+      'FLUSH LOGS', // Ensure ZongJi perseveres through a rotation event
       `DROP TABLE IF EXISTS ${TEST_TABLE}`,
       `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
       `INSERT INTO ${TEST_TABLE} (col) VALUES (12)`,
@@ -129,8 +130,6 @@ tap.test('Class constructor', test => {
         });
     });
   }
-
-  const mysql = require('mysql2');
 
   test.test('pass a mysql connection instance', test => {
     const conn = mysql.createConnection(settings.connection);

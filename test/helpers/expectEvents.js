@@ -1,4 +1,4 @@
-const MAX_WAIT = 3000;
+export const MAX_WAIT = 3000;
 
 // Check an array of events against an array of expectations
 // @param {object} test - Pass-thru from nodeunit test case
@@ -37,4 +37,4 @@ function expectEvents(test, events, expected, multiplier, callback, waitIndex) {
   }
 }
 
-module.exports = expectEvents;
+export default expectEvents;

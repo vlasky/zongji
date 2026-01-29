@@ -1,10 +1,10 @@
 // Replication logs will be cleared!
 // Database will be recreated!
-module.exports = {
+export default {
   connection: {
     host     : process.env.MYSQL_HOST || 'localhost',
     user     : 'root',
-    password : 'numtel',
+    password : 'secret',
     charset  : 'utf8mb4_unicode_ci',
     port     : process.env.TEST_MYSQL_PORT,
     timezone : process.env.TEST_TIMEZONE || 'Z',

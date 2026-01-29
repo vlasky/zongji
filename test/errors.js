@@ -1,8 +1,8 @@
-const tap = require('tap');
+import tap from 'tap';
 
-const ZongJi = require('../');
-const settings = require('./settings/mysql');
-const testDb = require('./helpers');
+import ZongJi from '../index.js';
+import settings from './settings/mysql.js';
+import * as testDb from './helpers/index.js';
 
 tap.test('Connect to an invalid host', test => {
   const zongji = new ZongJi({
@@ -11,22 +11,29 @@ tap.test('Connect to an invalid host', test => {
     password: 'wrongpass'
   });
 
-  zongji.once('error', function(error) {
-    test.ok(['ENOTFOUND', 'ETIMEDOUT'].indexOf(error.code) !== -1);
-    test.end();
+  let ended = false;
+  // ZongJi creates two connections (ctrlConnection + connection), both will
+  // fail with ENOTFOUND. We must handle all errors to prevent unhandled rejections.
+  zongji.on('error', function(error) {
+    if (!ended) {
+      ended = true;
+      test.ok(['ENOTFOUND', 'ETIMEDOUT'].indexOf(error.code) !== -1);
+      zongji.stop();
+      test.end();
+    }
+    // Ignore subsequent errors - they're expected from the second connection
   });
 
-  test.teardown(() => zongji.stop());
   zongji.start();
 });
 
-tap.test('Initialise testing db', test => {
-  testDb.init(err => {
-    if (err) {
-      return test.threw(err);
-    }
-    test.end();
-  });
+tap.test('Initialise testing db', async test => {
+  try {
+    await testDb.initAsync();
+    test.pass('database initialized');
+  } catch (err) {
+    test.fail(err);
+  }
 });
 
 const ACCEPTABLE_ERRORS = [
