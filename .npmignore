@@ -3,9 +3,23 @@
 *~
 *.log
 
+#Build/test files/folders
 test/
 build/
 npm-install-stamp
+.tap
 
+#Code editors
 *.sublime-project
 *.sublime-workspace
+
+#AI tools
+.claude/
+.codex/
+.gemini/
+.mcp/
+.mcp.json
+
+# Local override files
+*.local.md
+

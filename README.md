@@ -1,3 +1,8 @@
+[![npm version](https://img.shields.io/npm/v/@vlasky/zongji.svg)](https://www.npmjs.com/package/@vlasky/zongji)
+[![npm downloads](https://img.shields.io/npm/dm/@vlasky/zongji.svg)](https://www.npmjs.com/package/@vlasky/zongji)
+[![node version](https://img.shields.io/node/v/@vlasky/zongji.svg)](https://www.npmjs.com/package/@vlasky/zongji)
+[![license](https://img.shields.io/npm/l/@vlasky/zongji.svg)](https://github.com/vlasky/zongji/blob/master/LICENSE)
+
 MySQL binlog-based change data capture (CDC) for Node.js, [originally created by Nevill Dutt](https://github.com/nevill/zongji).
 
 [@vlasky/zongji](https://github.com/vlasky/zongji) has been tested working with MySQL 5.7, 8.0 and 8.4.

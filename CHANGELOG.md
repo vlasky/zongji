@@ -2,6 +2,11 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
+## [0.6.1] - 2026-02-13
+
+- Updated .gitignore and .npmignore to exclude AI tool and build/test files
+- Added npm version, downloads, node version, and licence badges to README
+
 ## [0.6.0] - 2026-02-13
 
 - Migrate from @vlasky/mysql to mysql2

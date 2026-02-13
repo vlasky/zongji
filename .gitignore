@@ -26,3 +26,17 @@ npm-install-stamp
 ben.js
 .vagrant
 Vagrantfile
+
+#Code editors
+*.sublime-project
+*.sublime-workspace
+
+#AI tools
+.claude/
+.codex/
+.gemini/
+.mcp/
+.mcp.json
+
+# Local override files
+*.local.md
