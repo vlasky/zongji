@@ -285,6 +285,28 @@ class ZongJi extends EventEmitter {
       includeSchema,
       excludeSchema,
     };
+
+    // Precompiled lookups so per-event filtering is O(1). Only own keys of
+    // the schema objects are considered (no prototype leakage).
+    const compileSchemaFilter = (schema) => {
+      if (schema === undefined || schema === null) {
+        return undefined;
+      }
+      const compiled = new Map();
+      for (const database of Object.keys(schema)) {
+        const tables = schema[database];
+        compiled.set(database, tables === true ?
+          true : new Set(Array.isArray(tables) ? tables : []));
+      }
+      return compiled;
+    };
+
+    this._includeEventsSet = includeEvents === undefined ?
+      undefined : new Set(Array.isArray(includeEvents) ? includeEvents : []);
+    this._excludeEventsSet =
+      new Set(Array.isArray(excludeEvents) ? excludeEvents : []);
+    this._includeSchemaMap = compileSchemaFilter(includeSchema);
+    this._excludeSchemaMap = compileSchemaFilter(excludeSchema) || new Map();
   }
 
   get(name) {
@@ -532,42 +554,28 @@ class ZongJi extends EventEmitter {
 
   // It includes every events by default.
   _skipEvent(name) {
-    const includes = this.filters.includeEvents;
-    const excludes = this.filters.excludeEvents;
-
-    let included = (includes === undefined) ||
-      (Array.isArray(includes) && (includes.indexOf(name) > -1));
-    let excluded = Array.isArray(excludes) && (excludes.indexOf(name) > -1);
-
-    return excluded || !included;
+    if (this._excludeEventsSet.has(name)) {
+      return true;
+    }
+    return this._includeEventsSet !== undefined &&
+      !this._includeEventsSet.has(name);
   }
 
   // It doesn't skip any schema by default.
   _skipSchema(database, table) {
-    const includes = this.filters.includeSchema;
-    const excludes = this.filters.excludeSchema || {};
+    const excludeEntry = this._excludeSchemaMap.get(database);
+    if (excludeEntry === true ||
+        (excludeEntry instanceof Set && excludeEntry.has(table))) {
+      return true;
+    }
 
-    let included = (includes === undefined) ||
-      (
-        (database in includes) &&
-        (
-          includes[database] === true ||
-          (
-            Array.isArray(includes[database]) &&
-            includes[database].indexOf(table) > -1
-          )
-        )
-      );
-    let excluded = (database in excludes) &&
-      (
-        excludes[database] === true ||
-        (
-          Array.isArray(excludes[database]) &&
-          excludes[database].indexOf(table) > -1
-        )
-      );
-
-    return excluded || !included;
+    if (this._includeSchemaMap === undefined) {
+      return false;
+    }
+    const includeEntry = this._includeSchemaMap.get(database);
+    const included = includeEntry === true ||
+      (includeEntry instanceof Set && includeEntry.has(table));
+    return !included;
   }
 }
 
