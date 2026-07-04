@@ -223,6 +223,71 @@ defineTypeTest('decimal', [
   [1447410019.012], [123.00000123], [0.0004321]
 ].map(function(x) { return [ x[0], x[0] ]; }));
 
+// DECIMAL values must round-trip exactly as strings (mysql2 semantics when
+// decimalNumbers is not set), including values beyond double precision.
+defineTypeTest('decimal_exact', [
+  'DECIMAL(65, 30) NULL',
+  'DECIMAL(20, 0) NULL',
+  'DECIMAL(10, 10) NULL'
+], [
+  [
+    "'12345678901234567.890123456789012345678901234567'",
+    "'12345678901234567890'",
+    "'0.0123456789'"
+  ],
+  [
+    "'-12345678901234567.890123456789012345678901234567'",
+    "'-12345678901234567890'",
+    "'-0.0123456789'"
+  ],
+  ["'0'", "'0'", "'0'"],
+  [null, null, null],
+], function(test, event) {
+  // mysql2 returns DECIMAL as exact strings by default; binlog values
+  // must match strictly (no float coercion)
+  event.rows.forEach((row, index) => {
+    test.strictSame(row.col0, this[index].col0);
+    test.strictSame(row.col1, this[index].col1);
+    test.strictSame(row.col2, this[index].col2);
+  });
+});
+
+// With the mysql2 decimalNumbers option set, DECIMAL values are returned
+// as Numbers instead of strings.
+tap.test('decimal with decimalNumbers option', test => {
+  const TEST_TABLE = 'type_decimal_numbers';
+  const zongji = new ZongJi({ ...settings.connection, decimalNumbers: true });
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  zongji.on('binlog', event => events.push(event));
+  zongji.on('error', error => test.fail(error));
+  zongji.start({
+    startAtEnd: true,
+    serverId: testDb.serverId(),
+    includeEvents: ['tablemap', 'writerows'],
+  });
+
+  zongji.on('ready', () => {
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (col0 DECIMAL(30, 10))`,
+      `INSERT INTO ${TEST_TABLE} (col0) VALUES (-123.45)`,
+    ], error => {
+      if (error) {
+        return test.fail(error);
+      }
+      expectEvents(test, events, [
+        { _type: 'TableMap' },
+        { _type: 'WriteRows', rows: [{ col0: -123.45 }] },
+      ], 1, () => {
+        test.strictSame(events[1].rows[0].col0, -123.45);
+        test.end();
+      });
+    });
+  });
+});
+
 defineTypeTest('blob', [
   'BLOB NULL',
   'TINYBLOB NULL',
