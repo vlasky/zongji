@@ -35,6 +35,7 @@ class ZongJi extends EventEmitter {
     this.ctrlCallbacks = [];
     this.tableMap = {};
     this._warnedUnsupported = new Set();
+    this._currentGtid = undefined;
     this.ready = false;
     this.stopped = false;
     this._starting = false;
@@ -354,6 +355,10 @@ class ZongJi extends EventEmitter {
     this._startEpoch += 1;
     const epoch = this._startEpoch;
 
+    // A resumed stream must not attribute early events to a GTID seen
+    // before the restart
+    this._currentGtid = undefined;
+
     this.stopped = false;
 
     if (!this.connection || !this.ctrlConnection) {
@@ -395,6 +400,16 @@ class ZongJi extends EventEmitter {
       });
     };
 
+    // Attach the current transaction's GTID (tracked at the packet layer,
+    // even when 'gtid' events are filtered out). Gtid/AnonymousGtid events
+    // keep their own parsed value.
+    const attachGtid = (event) => {
+      if (!('gtid' in event)) {
+        event.gtid = this._currentGtid;
+      }
+      return event;
+    };
+
     const binlogHandler = (error, event) => {
       if (error) {
         return this.emit('error', error);
@@ -412,6 +427,7 @@ class ZongJi extends EventEmitter {
           if (!tableMap || tableMap.tableName !== event.tableName || tableMap.columns.length !== event.columnCount) {
             if (!this.connection) return;
             this.connection.pause();
+            attachGtid(event);
             this._fetchTableInfo(event, () => {
               // merge the column info with metadata
               event.updateColumnInfo();
@@ -429,7 +445,7 @@ class ZongJi extends EventEmitter {
           break;
       }
       this.options.position = event.nextPosition;
-      this.emit('binlog', event);
+      this.emit('binlog', attachGtid(event));
     };
 
     let promises = [new Promise(testChecksum)];

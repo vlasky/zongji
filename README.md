@@ -169,6 +169,8 @@ Event name  | Description
 `transactionpayload` | Compressed transaction from MySQL 8.0.20+ servers with `binlog_transaction_compression=ON`. ZongJi cannot decode the row events inside it, so it emits an `error` (once per instance) naming the server setting responsible.
 `partialupdaterows` | Partial JSON update from MySQL 8.0+ servers with `binlog_row_value_options=PARTIAL_JSON`. ZongJi cannot decode the JSON diff format, so it emits an `error` (once per instance) naming the server setting responsible.
 
+When the server runs with `gtid_mode=ON`, every emitted event carries a `gtid` property (`'uuid:sequence'`) identifying the transaction it belongs to, tracked internally even if `gtid` events are excluded by `includeEvents`. It is `undefined` for anonymous transactions and for events seen before the stream's first GTID event. Use it for checkpointing and deduplication.
+
 **Event Methods**
 
 Neither method requires any arguments.

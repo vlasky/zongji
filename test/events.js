@@ -755,3 +755,84 @@ tap.test('Binlog stream with connection compression', test => {
     });
   });
 });
+
+// event.gtid: row events carry the GTID of their transaction even when
+// 'gtid' events are excluded from includeEvents. Runs with gtid_mode=ON
+// (enabled here if necessary, as in the GTID events test above).
+tap.test('event.gtid attached to row events', test => {
+  const TEST_TABLE = 'event_gtid_test';
+  const GTID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d+$/;
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => test.fail(err));
+
+  const ensureGtidQueries = [
+    'SET GLOBAL enforce_gtid_consistency = ON',
+    'SET GLOBAL gtid_mode = OFF_PERMISSIVE',
+    'SET GLOBAL gtid_mode = ON_PERMISSIVE',
+    'SET GLOBAL gtid_mode = ON',
+  ];
+
+  testDb.execute([
+    'SELECT @@GLOBAL.gtid_mode AS gtid_mode',
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], (err, results) => {
+    if (err) {
+      return test.fail(err);
+    }
+    const enableGtid =
+      results[0][0].gtid_mode === 'ON' ? [] : ensureGtidQueries;
+
+    const runTest = () => {
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        // 'gtid' deliberately NOT included: tracking must still work
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        // Two separate statements = two transactions = two GTIDs
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (2)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          expectEvents(test, events, [
+            tableMapEvent(TEST_TABLE),
+            { _type: 'WriteRows' },
+          ], 2, () => {
+            const [tm1, wr1, tm2, wr2] = events;
+            for (const evt of events) {
+              test.match(evt.gtid, GTID_REGEX,
+                `${evt.getTypeName()} carries a GTID`);
+            }
+            test.equal(tm1.gtid, wr1.gtid,
+              'tablemap and rows of one transaction share a GTID');
+            test.equal(tm2.gtid, wr2.gtid);
+            test.not(wr1.gtid, wr2.gtid,
+              'separate transactions have distinct GTIDs');
+            test.end();
+          });
+        });
+      });
+    };
+
+    if (enableGtid.length === 0) {
+      return runTest();
+    }
+    testDb.execute(enableGtid, enableErr => {
+      if (enableErr) {
+        return test.fail(enableErr);
+      }
+      runTest();
+    });
+  });
+});

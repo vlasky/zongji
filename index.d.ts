@@ -56,6 +56,13 @@ export interface BinlogEvent {
   nextPosition: number;
   /** Size of the event in bytes */
   size: number;
+  /**
+   * GTID of the transaction this event belongs to ('uuid:sequence'),
+   * when the server runs with gtid_mode=ON. Undefined for anonymous
+   * transactions and for events seen before the first GTID event of the
+   * stream. On Gtid/AnonymousGtid events this is their own parsed value.
+   */
+  gtid?: string;
   /** Get the lowercase event name */
   getEventName(): string;
   /** Get the event class name */
