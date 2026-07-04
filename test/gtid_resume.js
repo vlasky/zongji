@@ -187,6 +187,63 @@ tap.test('purged required GTIDs surface as an explicit error', test => {
   });
 });
 
+tap.test('gtidSet never claims an uncommitted XA transaction', test => {
+  const TABLE = 'gtid_xa_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => new Promise(resolve => {
+    zongji.stop();
+    // Roll back the prepared transaction if the test failed before commit
+    testDb.execute(["XA ROLLBACK 'xatest'"], () => resolve());
+  }));
+  zongji.on('error', err => test.fail(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TABLE}`,
+    `CREATE TABLE ${TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      const baseline = zongji.gtidSet;
+      // All statements share one connection inside a single execute()
+      testDb.execute([
+        "XA START 'xatest'",
+        `INSERT INTO ${TABLE} (col) VALUES (1)`,
+        "XA END 'xatest'",
+        "XA PREPARE 'xatest'",
+      ], prepareErr => {
+        if (prepareErr) {
+          return test.fail(prepareErr);
+        }
+
+        setTimeout(() => {
+          test.equal(zongji.gtidSet, baseline,
+            'prepared-but-uncommitted XA transaction is not claimed');
+
+          testDb.execute(["XA COMMIT 'xatest'"], commitErr => {
+            if (commitErr) {
+              return test.fail(commitErr);
+            }
+            setTimeout(() => {
+              test.not(zongji.gtidSet, baseline,
+                'set advances once the XA transaction commits');
+              test.end();
+            }, 1000);
+          });
+        }, 1000);
+      });
+    });
+  });
+});
+
 tap.test('invalid gtidSet rejected before any connection work', test => {
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => zongji.stop());

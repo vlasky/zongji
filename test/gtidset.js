@@ -55,6 +55,12 @@ tap.test('invalid input rejected', test => {
   test.throws(() => GtidSet.parse(`${UUID_A}:0`), 'gno must be >= 1');
   test.throws(() => GtidSet.parse(`${UUID_A}:1-2-3`));
   test.throws(() => new GtidSet().add('no-colon'));
+  // Decimal digits only, per the MySQL GTID grammar
+  test.throws(() => GtidSet.parse(`${UUID_A}:1e3`), 'exponent notation');
+  test.throws(() => GtidSet.parse(`${UUID_A}:0x10`), 'hex notation');
+  test.throws(() => GtidSet.parse(`${UUID_A}:1.0`), 'decimal point');
+  test.throws(() => GtidSet.parse(`${UUID_A}:9007199254740993`),
+    'beyond Number.MAX_SAFE_INTEGER');
   test.end();
 });
 

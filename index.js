@@ -231,11 +231,20 @@ class ZongJi extends EventEmitter {
       case 'xid':
         fold();
         break;
-      case 'query':
-        if (event.query !== 'BEGIN') {
+      case 'query': {
+        // Fold only on definite commit markers. Anything else (BEGIN,
+        // XA START/END, DDL, SAVEPOINT, ...) must not fold: claiming a
+        // transaction early risks losing its remaining events on resume,
+        // whereas not folding merely delays the checkpoint until the
+        // next transaction's GTID arrives (at-least-once redelivery).
+        const query = event.query.trim().toUpperCase();
+        if (query === 'COMMIT' || query === 'ROLLBACK' ||
+            query.startsWith('XA COMMIT') ||
+            query.startsWith('XA ROLLBACK')) {
           fold();
         }
         break;
+      }
       case 'previousgtids':
         // When dumping from the start of a binlog file, its Previous_gtids
         // event is the exact "everything before this point" seed
@@ -470,6 +479,10 @@ class ZongJi extends EventEmitter {
 
     const findBinlogEnd = (resolve, reject) => {
       this._findBinlogEnd((err, result) => {
+        // As above: never mutate options for a superseded start()
+        if (epoch !== this._startEpoch) {
+          return resolve();
+        }
         if (err) {
           return reject(err);
         }
@@ -493,6 +506,11 @@ class ZongJi extends EventEmitter {
     const seedGtidsFromServer = (resolve, reject) => {
       this.ctrlConnection.query(
         'SELECT @@GLOBAL.gtid_executed AS gtidExecuted', (err, rows) => {
+          // A stale seed must not overwrite state belonging to a newer
+          // start() that superseded this one while the query was in flight
+          if (epoch !== this._startEpoch) {
+            return resolve();
+          }
           if (err) {
             return reject(err);
           }

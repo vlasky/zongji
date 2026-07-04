@@ -113,8 +113,8 @@ export interface GtidEvent extends BinlogEvent {
   flags: number;
   /** Source UUID */
   sid: string;
-  /** Group number */
-  gno: number;
+  /** Group number (exact string beyond Number.MAX_SAFE_INTEGER) */
+  gno: number | string;
   /** Full GTID string (sid:gno) */
   gtid: string;
 }
@@ -127,8 +127,8 @@ export interface AnonymousGtidEvent extends BinlogEvent {
   flags: number;
   /** Source UUID */
   sid: string;
-  /** Group number */
-  gno: number;
+  /** Group number (exact string beyond Number.MAX_SAFE_INTEGER) */
+  gno: number | string;
   /** Full GTID string (sid:gno) */
   gtid: string;
 }
