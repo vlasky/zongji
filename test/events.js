@@ -582,3 +582,56 @@ tap.test('GTID events', test => {
     });
   });
 });
+
+tap.test('Table name containing quote characters', test => {
+  // Regression test: table metadata is fetched with a parameterised query,
+  // so identifiers containing quotes must not break (or inject into) the
+  // INFORMATION_SCHEMA lookup.
+  const TEST_TABLE = 'quote\'in"name';
+  const ESCAPED_TABLE = '`' + TEST_TABLE + '`';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const errors = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => errors.push(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${ESCAPED_TABLE}`,
+    `CREATE TABLE ${ESCAPED_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${ESCAPED_TABLE} (col) VALUES (42)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+
+        expectEvents(test, events, [
+          tableMapEvent(TEST_TABLE),
+          {
+            _type: 'WriteRows',
+            _custom: checkTableMatches(TEST_TABLE),
+            rows: [{ col: 42 }],
+          },
+        ], 1, () => {
+          test.equal(errors.length, 0, 'no errors during quoted table test');
+          test.end();
+        });
+      });
+    });
+  });
+});

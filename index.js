@@ -7,17 +7,11 @@ const ConnectionConfigMap = {
   'Pool': obj => obj.config.connectionConfig,
 };
 
-const TableInfoQueryTemplate = `SELECT
+const TableInfoQuery = `SELECT
   COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME,
   COLUMN_COMMENT, COLUMN_TYPE
-  FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s'
+  FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?
   ORDER BY ORDINAL_POSITION`;
-
-// Simple format function to replace %s placeholders
-function formatSql(template, ...args) {
-  let i = 0;
-  return template.replace(/%s/g, () => args[i++]);
-}
 
 class ZongJi extends EventEmitter {
   constructor(dsn) {
@@ -184,9 +178,6 @@ class ZongJi extends EventEmitter {
   }
 
   _fetchTableInfo(tableMapEvent, next) {
-    const sql = formatSql(TableInfoQueryTemplate,
-      tableMapEvent.schemaName, tableMapEvent.tableName);
-
     if (!this.ctrlConnection ||
         this.ctrlConnection.state === 'disconnected' ||
         this.ctrlConnection._fatalError ||
@@ -195,8 +186,12 @@ class ZongJi extends EventEmitter {
       return;
     }
 
+    const params = [tableMapEvent.schemaName, tableMapEvent.tableName];
     try {
-      this.ctrlConnection.query(sql, (err, rows) => {
+      // execute() uses a server-side prepared statement: parameters are sent
+      // out-of-band (never spliced into SQL text) and the statement is cached
+      // per connection, so repeated metadata lookups avoid re-parsing.
+      this.ctrlConnection.execute(TableInfoQuery, params, (err, rows) => {
       if (err) {
         // Errors should be emitted
         this.emit('error', err);
