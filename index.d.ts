@@ -227,6 +227,11 @@ export interface TableMapEvent extends BinlogEvent {
    */
   columnVisibility?: boolean[];
   /**
+   * Per-column geometry subtype from binlog metadata (0 = geometry,
+   * 1 = point, ...); undefined entries are non-spatial columns
+   */
+  geometryTypes?: (number | undefined)[];
+  /**
    * True when the event carries binlog_row_metadata=FULL metadata, in
    * which case zongji decodes rows without querying INFORMATION_SCHEMA
    */

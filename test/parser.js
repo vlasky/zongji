@@ -174,7 +174,10 @@ tap.test('binlog_row_metadata=FULL: synthesised column schemas', test => {
   test.equal(byName.u_big.COLUMN_TYPE, 'bigint unsigned');
   test.equal(byName.u_big.UNSIGNED, true);
   test.equal(byName.dec_col.COLUMN_TYPE, 'decimal(30,10)');
+  test.equal(byName.vc.COLUMN_TYPE, 'varchar(20)',
+    'character width recovered from byte width and charset');
   test.equal(byName.vc.CHARACTER_SET_NAME, 'utf8mb4');
+  test.equal(byName.ch.COLUMN_TYPE, 'char(5)');
   test.equal(byName.bin_col.COLUMN_TYPE, 'binary(4)');
   test.equal(byName.bin_col.CHARACTER_SET_NAME, null);
   test.equal(byName.vb.COLUMN_TYPE, 'varbinary(8)');
@@ -200,6 +203,43 @@ tap.test('binlog_row_metadata=FULL: synthesised column schemas', test => {
   test.equal(tm.signedness[2], true, 'u_big signedness bit');
   test.equal(tm.signedness[4], undefined,
     'non-numeric columns carry no signedness');
+  test.end();
+});
+
+tap.test('malformed optional metadata falls back to fetched schemas', test => {
+  const zongji = new ZongJi({});
+  zongji.useChecksum = FIXTURE_FULLMETA.useChecksum;
+  zongji.connection = { config: { ...FIXTURE_FULLMETA.connectionConfig } };
+  const BinlogPacket = initBinlogPacketClass(zongji);
+
+  const tableMapIndex = FIXTURE_FULLMETA.eventSummary.indexOf('TableMap');
+  const buffer = Buffer.from(FIXTURE_FULLMETA.packets[tableMapIndex], 'hex');
+
+  // Locate the SIGNEDNESS field (type byte 0x01, length 0x01 for this
+  // table) near the end of the event and corrupt its length so the field
+  // parser would read into the next field
+  let corrupted = null;
+  for (let i = buffer.length - 1; i > 0; i--) {
+    if (buffer[i] === 0x01 && buffer[i + 1] === 0x01) {
+      corrupted = Buffer.from(buffer);
+      corrupted[i + 1] = 0xf0; // absurd length, overruns the event
+      break;
+    }
+  }
+  test.ok(corrupted, 'found the SIGNEDNESS field to corrupt');
+
+  const parser = new Parser(
+    { buffer: corrupted, offset: 0, end: corrupted.length });
+  const binlogPacket = new BinlogPacket();
+  binlogPacket.parse(parser);
+  const event = binlogPacket.getEvent();
+
+  test.equal(event.getTypeName(), 'TableMap',
+    'event still parses (metadata is optional)');
+  test.equal(event.hasSelfDescribingMetadata(), false,
+    'corrupt metadata is discarded entirely');
+  test.equal(event.signedness, undefined);
+  test.equal(event.primaryKey, undefined);
   test.end();
 });
 
