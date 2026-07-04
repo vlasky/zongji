@@ -7,6 +7,7 @@ import tap from 'tap';
 
 import ZongJi from '../index.js';
 import initBinlogPacketClass from '../lib/packet/binlog.js';
+import initBinlogClass from '../lib/sequence/binlog.js';
 import { Parser } from '../lib/reader.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(
@@ -161,6 +162,39 @@ tap.test('non-row events decode', test => {
   const previous = events.filter(e => e.getTypeName() === 'PreviousGtids');
   previous.forEach(p => test.type(p.gtidSet, 'string'));
 
+  test.end();
+});
+
+tap.test('corrupt gtid packet surfaces an error even when filtered', test => {
+  const zongji = new ZongJi({});
+  zongji.useChecksum = FIXTURE.useChecksum;
+  zongji.connection = { config: { ...FIXTURE.connectionConfig } };
+  // 'gtid' is NOT included: the parse error must still be delivered,
+  // because transaction attribution for all following events depends on it
+  zongji._filters({ includeEvents: ['tablemap', 'writerows'] });
+
+  const gtidIndex = FIXTURE.eventSummary.indexOf('Gtid');
+  const full = Buffer.from(FIXTURE.packets[gtidIndex], 'hex');
+  // Header parses (marker + 19 bytes) but the 25-byte GTID body does not
+  const truncated = full.subarray(0, 25);
+
+  const deliveries = [];
+  const BinlogClass = initBinlogClass(zongji);
+  const command = new BinlogClass(function(error, event) {
+    deliveries.push({ error, event });
+  });
+  command.binlogData({
+    buffer: truncated,
+    offset: 0,
+    end: truncated.length,
+    isEOF: () => false,
+    isError: () => false,
+  });
+
+  test.equal(deliveries.length, 1, 'callback invoked despite the filter');
+  test.type(deliveries[0].error, Error);
+  test.equal(zongji._currentGtid, undefined,
+    'no stale GTID left behind for following events');
   test.end();
 });
 

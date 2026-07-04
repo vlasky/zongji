@@ -1,6 +1,6 @@
 {
   "name": "@vlasky/zongji",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "MySQL binlog-based change data capture (CDC) for Node.js",
   "type": "module",
   "main": "index.js",

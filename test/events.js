@@ -836,3 +836,268 @@ tap.test('event.gtid attached to row events', test => {
     });
   });
 });
+
+// Regression: filters passed to a start() issued while a previous start()
+// is still initialising must be applied, not silently dropped. Consumers
+// (e.g. mysql-live-select) register tables between start() and 'ready'
+// and re-call start() to apply them, the documented way to update
+// filters since they became snapshotted.
+tap.test('start() during initialisation applies new filters', test => {
+  const TABLE_A = 'init_filter_a';
+  const TABLE_B = 'init_filter_b';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+  zongji.on('error', err => test.fail(err));
+
+  const rowTables = [];
+  zongji.on('binlog', evt => {
+    if (evt.getTypeName() === 'WriteRows') {
+      rowTables.push(evt.tableMap[evt.tableId].tableName);
+    }
+  });
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TABLE_A}`,
+    `DROP TABLE IF EXISTS ${TABLE_B}`,
+    `CREATE TABLE ${TABLE_A} (col INT UNSIGNED)`,
+    `CREATE TABLE ${TABLE_B} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    const firstServerId = testDb.serverId();
+    zongji.start({
+      startAtEnd: true,
+      serverId: firstServerId,
+      includeEvents: ['tablemap', 'writerows'],
+      includeSchema: { [testDb.SCHEMA_NAME]: [TABLE_A] },
+    });
+
+    // Still initialising: this must update the filters (to table B only)
+    // without clobbering the first call's stream options
+    zongji.start({
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+      includeSchema: { [testDb.SCHEMA_NAME]: [TABLE_B] },
+    });
+
+    zongji.on('ready', () => {
+      test.equal(zongji.options.serverId, firstServerId,
+        'stream options from the first start() are preserved');
+
+      testDb.execute([
+        `INSERT INTO ${TABLE_A} (col) VALUES (1)`,
+        `INSERT INTO ${TABLE_B} (col) VALUES (2)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.strictSame(rowTables, [TABLE_B],
+            'only the second start() call\'s filters are in effect');
+          test.end();
+        }, 1000);
+      });
+    });
+  });
+});
+
+// Regression: options.position must never advance past a TableMap event.
+// A consumer persisting options.position for resume-on-reconnect could
+// otherwise land between a TableMap and its row events; the resumed
+// instance then has no metadata for the tableId and silently drops the
+// rows. Holding position back replays the TableMap first (at-least-once
+// delivery of the rows that followed it).
+tap.test('resume position never lands after a TableMap event', test => {
+  const TEST_TABLE = 'tablemap_position_test';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+  zongji.on('error', err => test.fail(err));
+
+  let tableMapCount = 0;
+  let snapshot = null;
+  const rows = [];
+  zongji.on('binlog', evt => {
+    const type = evt.getTypeName();
+    if (type === 'TableMap' && evt.tableName === TEST_TABLE) {
+      tableMapCount++;
+      test.ok(zongji.options.position < evt.nextPosition,
+        'position held back at TableMap #' + tableMapCount);
+      if (tableMapCount === 2) {
+        // The second TableMap goes through the cached-metadata path,
+        // which used to advance the position past itself
+        snapshot = {
+          filename: zongji.options.filename,
+          position: zongji.options.position,
+        };
+      }
+    }
+    if (type === 'WriteRows') {
+      rows.push(evt.rows[0].col);
+    }
+  });
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (2)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.strictSame(rows, [1, 2]);
+          test.ok(snapshot, 'captured resume point at the second TableMap');
+          zongji.stop();
+
+          // Resume a fresh instance (empty tableMap cache) at the
+          // persisted point: the row events must still be delivered
+          const resumed = new ZongJi(settings.connection);
+          test.teardown(() => resumed.stop());
+          resumed.on('error', resumeErr => test.fail(resumeErr));
+
+          const resumedRows = [];
+          resumed.on('binlog', evt => {
+            if (evt.getTypeName() === 'WriteRows' &&
+                evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+              resumedRows.push(evt.rows[0].col);
+            }
+          });
+
+          resumed.start({
+            filename: snapshot.filename,
+            position: snapshot.position,
+            serverId: testDb.serverId(),
+            includeEvents: ['tablemap', 'writerows'],
+          });
+
+          resumed.on('ready', () => {
+            setTimeout(() => {
+              test.ok(resumedRows.includes(2),
+                'row following the TableMap is delivered after resume, ' +
+                'not silently dropped');
+              test.end();
+            }, 1000);
+          });
+        }, 1000);
+      });
+    });
+  });
+});
+
+// Regression: a rotate event's payload position (start of the NEW file)
+// is the only value coherent with its binlogName. Using the header
+// nextPosition (an OLD-file offset; 0 for the artificial rotate at dump
+// start) left options as a corrupt (new file, old offset) resume pair.
+tap.test('rotate events keep filename and position coherent', test => {
+  const TEST_TABLE = 'rotate_position_test';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+  zongji.on('error', err => test.fail(err));
+
+  let sawRealRotate = false;
+  zongji.on('binlog', evt => {
+    if (evt.getTypeName() !== 'Rotate') {
+      return;
+    }
+    test.equal(zongji.options.filename, evt.binlogName,
+      'filename follows the rotate');
+    test.equal(zongji.options.position, evt.position,
+      'position is the rotate payload position, not the header value');
+    test.ok(zongji.options.position > 0,
+      'artificial rotate at dump start must not zero the position');
+    if (evt.timestamp !== 0) {
+      // Real rotation from FLUSH LOGS: new file starts at 4
+      sawRealRotate = true;
+      test.equal(evt.position, 4);
+    }
+  });
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['rotate', 'tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute(['FLUSH LOGS'], flushErr => {
+        if (flushErr) {
+          return test.fail(flushErr);
+        }
+        setTimeout(() => {
+          test.ok(sawRealRotate, 'real rotate observed');
+          const resumePoint = {
+            filename: zongji.options.filename,
+            position: zongji.options.position,
+          };
+          test.equal(resumePoint.position, 4,
+            'resume pair points at the start of the new file');
+
+          // Events written after the rotation must be reachable from the
+          // persisted pair
+          testDb.execute([
+            `INSERT INTO ${TEST_TABLE} (col) VALUES (7)`,
+          ], insertErr => {
+            if (insertErr) {
+              return test.fail(insertErr);
+            }
+            zongji.stop();
+
+            const resumed = new ZongJi(settings.connection);
+            test.teardown(() => resumed.stop());
+            resumed.on('error', resumeErr => test.fail(resumeErr));
+
+            const resumedRows = [];
+            resumed.on('binlog', evt => {
+              if (evt.getTypeName() === 'WriteRows' &&
+                  evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+                resumedRows.push(evt.rows[0].col);
+              }
+            });
+
+            resumed.start({
+              filename: resumePoint.filename,
+              position: resumePoint.position,
+              serverId: testDb.serverId(),
+              includeEvents: ['tablemap', 'writerows'],
+            });
+
+            resumed.on('ready', () => {
+              setTimeout(() => {
+                test.strictSame(resumedRows, [7],
+                  'stream resumes cleanly from the persisted pair');
+                test.end();
+              }, 1000);
+            });
+          });
+        }, 1000);
+      });
+    });
+  });
+});

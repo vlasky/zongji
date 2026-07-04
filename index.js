@@ -343,12 +343,17 @@ class ZongJi extends EventEmitter {
       return;
     }
 
-    // A duplicate start() while one is already initialising is ignored;
-    // the first call completes. But if stop() intervened, this start()
-    // must proceed as a restart: the epoch below makes the stale
-    // initialisation chain abort, so exactly one binlog dump command is
-    // ever enqueued.
+    // A duplicate start() while one is already initialising is ignored -
+    // the first call completes - but its filters are applied, exactly as
+    // in the already-running branch above: filters are snapshotted, and
+    // re-calling start() is the documented way to update them, so updates
+    // made during the initialisation window must not be lost. Stream
+    // options (filename/position/serverId) still come from the first
+    // call. If stop() intervened, this start() instead proceeds as a
+    // restart: the epoch below makes the stale initialisation chain
+    // abort, so exactly one binlog dump command is ever enqueued.
     if (this._starting && !this.stopped) {
+      this._filters(options);
       return;
     }
     this._starting = true;
@@ -429,8 +434,18 @@ class ZongJi extends EventEmitter {
             this.connection.pause();
             attachGtid(event);
             this._fetchTableInfo(event, () => {
-              // merge the column info with metadata
-              event.updateColumnInfo();
+              try {
+                // merge the column info with metadata
+                event.updateColumnInfo();
+              } catch (err) {
+                // Schema drift between binlog write and metadata fetch:
+                // drop the cached entry (subsequent row events for this
+                // table id are skipped rather than misdecoded) and report
+                delete this.tableMap[event.tableId];
+                this.emit('error', err);
+                if (this.connection) this.connection.resume();
+                return;
+              }
               this.emit('binlog', event);
               if (this.connection) this.connection.resume();
             });
@@ -439,12 +454,31 @@ class ZongJi extends EventEmitter {
           break;
         }
         case 'Rotate':
-          if (this.options.filename !== event.binlogName) {
-            this.options.filename = event.binlogName;
-          }
+          // The payload position is the first event of the NEW file: the
+          // only value coherent with binlogName. The header nextPosition
+          // refers to the OLD file (0 for the artificial rotate at dump
+          // start), so rotates are excluded from the generic update below;
+          // persisting (new filename, old-file offset) would corrupt the
+          // resume point until the next non-rotate event repaired it.
+          this.options.filename = event.binlogName;
+          this.options.position = event.position;
           break;
       }
-      this.options.position = event.nextPosition;
+      // Never advance the resume position past a TableMap: a consumer
+      // persisting options.position could otherwise resume in the gap
+      // between a TableMap and its row events, and with no cached table
+      // metadata those rows would be silently dropped. Holding position
+      // back means the TableMap is replayed before its rows on resume;
+      // rows already seen may be re-emitted (at-least-once), which is
+      // recoverable where dropping is not. A narrower window remains for
+      // multi-table statements (all TableMaps precede all row events, so
+      // emitting the first table's rows advances past the later
+      // TableMaps); the complete fix is advancing only at transaction
+      // boundaries, tracked pre-filter.
+      const typeName = event.getTypeName();
+      if (typeName !== 'TableMap' && typeName !== 'Rotate') {
+        this.options.position = event.nextPosition;
+      }
       this.emit('binlog', attachGtid(event));
     };
 

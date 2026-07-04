@@ -2,6 +2,14 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
+## [0.7.1] - 2026-07-04
+
+- Fix `start()` calls made while a previous `start()` was still initialising silently discarding their filters. Since 0.7.0 filters are snapshotted and re-calling `start()` is the documented way to update them, but updates made between `start()` and the `ready` event were lost; consumers registering tables during boot (e.g. @vlasky/mysql-live-select) missed events for tables added in that window. Filters passed during initialisation now apply, exactly as when already running; stream options (filename/position/serverId) still come from the first call.
+- Fix a resume-position gap that could silently drop row events. `options.position` was advanced past TableMap events on the cached-metadata path, so a consumer persisting `filename`/`position` for reconnect could resume between a TableMap and its row events; the resumed instance had no metadata for the table id and dropped those rows with no error. TableMap events no longer advance the resume position, closing the gap for single-table statements (the common case). A narrower window remains for multi-table statements (multi-table UPDATE, foreign-key cascades), where the server writes all TableMap events before any row events: emitting the first table's rows still advances the position past the later TableMaps. Rows already processed before a crash may be re-delivered after resume (at-least-once), which is recoverable where dropping is not.
+- Fix rotate events corrupting the `filename`/`position` resume pair. A rotate's header position refers to the old binlog file (0 for the artificial rotate at the start of every dump), yet it was written into `options.position` alongside the new file's name; a consumer resuming from that pair after a real rotation could get "position > file size" or a mid-event read, and the artificial rotate silently reset the start position to 0. The rotate's payload position (the start of the new file) is now used, and the filename update is unconditional. Present in every zongji release since the original upstream project.
+- Fix a corrupt GTID event's parse error being swallowed when `gtid` is excluded by `includeEvents`; the whole following transaction was then silently mislabelled as anonymous. The error now reaches the `error` event regardless of filtering.
+- Schema drift between a binlog event being written and the metadata fetch (e.g. a column dropped in between) now emits a descriptive error naming the table and column counts, instead of throwing a bare TypeError from inside event parsing; the affected table's rows are skipped until its next TableMap event refreshes the metadata.
+
 ## [0.7.0] - 2026-07-04
 
 ### Breaking changes
