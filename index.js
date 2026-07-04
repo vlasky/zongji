@@ -33,6 +33,7 @@ class ZongJi extends EventEmitter {
     this._filters({});
     this.ctrlCallbacks = [];
     this.tableMap = {};
+    this._warnedUnsupported = new Set();
     this.ready = false;
     this.stopped = false;
     this.useChecksum = false;
@@ -476,6 +477,16 @@ class ZongJi extends EventEmitter {
       clearTimeout(killTimeout);
       finish();
     }
+  }
+
+  // Emit an error the first time an undecodable event type arrives so that
+  // dropped row changes (e.g. compressed transactions) are never silent.
+  _warnUnsupportedEvent(EventClass) {
+    if (this._warnedUnsupported.has(EventClass.name)) {
+      return;
+    }
+    this._warnedUnsupported.add(EventClass.name);
+    this.emit('error', new Error(EventClass.unsupportedReason));
   }
 
   // It includes every events by default.

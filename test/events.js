@@ -635,3 +635,56 @@ tap.test('Table name containing quote characters', test => {
     });
   });
 });
+
+// MySQL 8.0.20+: compressed transactions arrive as TRANSACTION_PAYLOAD_EVENT,
+// which zongji cannot decode. The row changes are dropped, but an error must
+// be emitted (once) so the data loss is not silent.
+testDb.requireVersion('8.0.20', () => {
+  tap.test('Transaction compression emits unsupported-event error', test => {
+    const TEST_TABLE = 'txn_compression_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+
+    const errors = [];
+    zongji.on('error', err => errors.push(err));
+
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        // All statements in one execute() call share a connection, so the
+        // session variable applies to the inserts
+        testDb.execute([
+          'SET SESSION binlog_transaction_compression=ON',
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (2)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+
+          // Wait for the binlog events to arrive
+          setTimeout(() => {
+            test.equal(errors.length, 1,
+              'exactly one error despite two compressed transactions');
+            test.match(errors[0].message, /TRANSACTION_PAYLOAD_EVENT/);
+            test.match(errors[0].message, /binlog_transaction_compression/);
+            test.end();
+          }, 1000);
+        });
+      });
+    });
+  });
+});
