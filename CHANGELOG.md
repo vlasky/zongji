@@ -22,6 +22,7 @@ All notable changes to @vlasky/zongji since forking from nevill/zongji.
 - Remove dead code left over from the mysql.js protocol layer (ComBinlog, EofPacket/ErrorPacket, BufferReader)
 - Compile event and schema filters into Sets and Maps for O(1) per-event filtering; only own keys of schema filter objects are considered
 - Add a package.json `exports` map with `types` and `default` conditions
+- Update mysql2 to ^3.22.5; the internal APIs zongji relies on (addCommand, handlePacket, packet sequence validation) were verified unchanged, and a new regression test covers the binlog stream over a compressed connection
 
 ## [0.6.1] - 2026-02-13
 

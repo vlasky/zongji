@@ -688,3 +688,70 @@ testDb.requireVersion('8.0.20', () => {
     });
   });
 });
+
+// The binlog stream with connection compression patches mysql2's
+// handlePacket to sync sequence IDs (MySQL resets inner packet sequence
+// numbers within compressed chunks). This exercises that patch against
+// the installed mysql2 version: events must arrive intact and without
+// "packets out of order" warnings.
+tap.test('Binlog stream with connection compression', test => {
+  const TEST_TABLE = 'compression_conn_test';
+
+  const warnings = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => {
+    if (typeof args[0] === 'string' && args[0].includes('packets out of order')) {
+      warnings.push(args[0]);
+      return;
+    }
+    originalConsoleError(...args);
+  };
+  test.teardown(() => {
+    console.error = originalConsoleError;
+  });
+
+  const zongji = new ZongJi({ ...settings.connection, compress: true });
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const errors = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => errors.push(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED, txt VARCHAR(100))`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      const inserts = Array.from({ length: 5 }, (_, i) =>
+        `INSERT INTO ${TEST_TABLE} (col, txt) VALUES (${i}, REPEAT('x', 100))`);
+      testDb.execute(inserts, insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        expectEvents(test, events, [
+          tableMapEvent(TEST_TABLE),
+          { _type: 'WriteRows' },
+        ], 5, () => {
+          test.equal(errors.length, 0, 'no errors over compressed stream');
+          test.equal(warnings.length, 0, 'no sequence ID warnings');
+          const values = events
+            .filter(e => e.getTypeName() === 'WriteRows')
+            .map(e => e.rows[0].col);
+          test.strictSame(values, [0, 1, 2, 3, 4]);
+          test.end();
+        });
+      });
+    });
+  });
+});
