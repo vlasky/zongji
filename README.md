@@ -158,7 +158,7 @@ Name   | Description
 ## Important Notes
 
 * :star2: All MySQL column types are supported, with type casting similar to [mysql2](https://github.com/sidorares/node-mysql2).
-* :speak_no_evil: 64-bit integer is supported via package big-integer(see #108). If an integer is within the safe range of JS number (-2^53, 2^53), a Number object will returned, otherwise, will return as String.
+* :speak_no_evil: 64-bit integers are decoded exactly using native BigInt (see #108). If an integer is within the safe range of JS numbers (-2^53, 2^53), a Number is returned, otherwise an exact String. This also applies to 64-bit integers inside JSON columns.
 * :point_right: `TRUNCATE` statement does not cause corresponding `DeleteRows` event. Use unqualified `DELETE FROM` for same effect.
 * When using fractional seconds with `DATETIME` and `TIMESTAMP` data types, only millisecond precision is available due to the limit of Javascript's `Date` object.
 * Binlog checksums (e.g. `CRC32`) are supported; zongji will detect and ignore the checksum bytes at the end of row events.

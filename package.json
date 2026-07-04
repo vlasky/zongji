@@ -42,7 +42,6 @@
     "tap": "^21.5.0"
   },
   "dependencies": {
-    "big-integer": "1.6.52",
     "iconv-lite": "0.7.2",
     "mysql2": "^3.17.1"
   }

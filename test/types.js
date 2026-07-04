@@ -172,6 +172,29 @@ defineTypeTest('int_unsigned', [
   [123456, 100, 96, 300, 1000]
 ]);
 
+// Boundary values must be exact: Numbers inside the safe integer range,
+// exact strings outside it. Values are passed as JS strings so they reach
+// the INSERT statement without floating point mangling.
+defineTypeTest('bigint_boundary', [
+  'BIGINT SIGNED NULL',
+  'BIGINT UNSIGNED NULL'
+], [
+  ["'9223372036854775807'", "'18446744073709551615'"],
+  ["'-9223372036854775808'", "'0'"],
+  ["'9007199254740991'", "'9007199254740991'"],
+  ["'-9007199254740991'", "'123'"],
+], function(test, event) {
+  const rows = event.rows;
+  test.strictSame(rows[0].col0, '9223372036854775807');
+  test.strictSame(rows[0].col1, '18446744073709551615');
+  test.strictSame(rows[1].col0, '-9223372036854775808');
+  test.strictSame(rows[1].col1, 0);
+  test.strictSame(rows[2].col0, 9007199254740991);
+  test.strictSame(rows[2].col1, 9007199254740991);
+  test.strictSame(rows[3].col0, -9007199254740991);
+  test.strictSame(rows[3].col1, 123);
+});
+
 defineTypeTest('double', [
   'DOUBLE NULL'
 ], [
