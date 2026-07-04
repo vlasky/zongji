@@ -9,9 +9,11 @@ MySQL binlog-based change data capture (CDC) for Node.js, [originally created by
 
 It leverages [`mysql2`](https://github.com/sidorares/node-mysql2) for connections and authentication, while using zongji's binlog parsing and event pipeline.
 
-# Latest Release
+# Release Notes
 
-Version 0.6.0 is a major modernisation that rewrites the codebase to use the mysql2 module, ES6 syntax and ESM exports, adds TypeScript definitions, and adds official support for MySQL 8.4.
+See the [CHANGELOG](CHANGELOG.md) for the full release history.
+
+Version 0.6.0 was a major modernisation that rewrote the codebase to use the mysql2 module, ES6 syntax and ESM exports, added TypeScript definitions, and added official support for MySQL 8.4.
 
 Version 0.5.9 is the last release that supports Node.js versions below 18 and CommonJS.
 

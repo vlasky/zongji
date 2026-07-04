@@ -328,6 +328,7 @@ declare class ZongJi extends EventEmitter {
     filename?: string;
     position?: number;
     startAtEnd?: boolean;
+    nonBlock?: boolean;
   };
   /** Current filter settings */
   filters: {

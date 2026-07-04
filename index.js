@@ -263,12 +263,14 @@ class ZongJi extends EventEmitter {
     filename,
     position,
     startAtEnd,
+    nonBlock,
   } = {}) {
     this.options = {
       serverId,
       filename,
       position,
       startAtEnd,
+      nonBlock,
     };
   }
 
@@ -509,6 +511,12 @@ class ZongJi extends EventEmitter {
       conn.on('error', () => {});
     };
 
+    // Capture the connections this stop() owns: finish() may fire from an
+    // async callback after a subsequent start() has already created
+    // replacement connections, and must not touch those
+    const ctrlConnection = this.ctrlConnection;
+    const ctrlToClose = this.ctrlConnectionOwner ? ctrlConnection : null;
+
     // Binary log connection does not end with destroy()
     let connectionThreadId = null;
     if (this.connection) {
@@ -526,25 +534,29 @@ class ZongJi extends EventEmitter {
     const finish = () => {
       if (finished) return;
       finished = true;
-      if (this.ctrlConnectionOwner && this.ctrlConnection) {
-        silenceErrors(this.ctrlConnection);
-        this.ctrlConnection.destroy();
+      if (ctrlToClose) {
+        silenceErrors(ctrlToClose);
+        ctrlToClose.destroy();
         // @ts-ignore - internal mysql2 API
-        if (this.ctrlConnection.stream && typeof this.ctrlConnection.stream.unref === 'function') {
+        if (ctrlToClose.stream && typeof ctrlToClose.stream.unref === 'function') {
           // @ts-ignore - internal mysql2 API
-          this.ctrlConnection.stream.unref();
+          ctrlToClose.stream.unref();
         }
-        this.ctrlConnection = null;
+        if (this.ctrlConnection === ctrlToClose) {
+          this.ctrlConnection = null;
+        }
       }
       this.emit('stopped');
     };
 
-    if (!this.ctrlConnection ||
-        this.ctrlConnection.state === 'disconnected' ||
-        this.ctrlConnection._fatalError ||
-        this.ctrlConnection._protocolError ||
-        this.ctrlConnection._closing) {
-      this.ctrlConnection = null;
+    if (!ctrlConnection ||
+        ctrlConnection.state === 'disconnected' ||
+        ctrlConnection._fatalError ||
+        ctrlConnection._protocolError ||
+        ctrlConnection._closing) {
+      if (this.ctrlConnection === ctrlConnection) {
+        this.ctrlConnection = null;
+      }
       return finish();
     }
 
@@ -554,7 +566,7 @@ class ZongJi extends EventEmitter {
 
     const killTimeout = setTimeout(finish, 1000);
     try {
-      this.ctrlConnection.query(
+      ctrlConnection.query(
         'KILL ' + connectionThreadId,
         () => {
           clearTimeout(killTimeout);

@@ -390,3 +390,64 @@ tap.test('stop() then start() while initialising restarts cleanly', test => {
     });
   });
 });
+
+tap.test('Immediate restart after stop() keeps new control connection alive', test => {
+  const TEST_TABLE = 'restart_ctrl_conn_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const errors = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => errors.push(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    let readyCount = 0;
+    zongji.on('ready', () => {
+      readyCount++;
+      if (readyCount === 1) {
+        // Restart immediately: the old stop()'s asynchronous KILL cleanup
+        // must not destroy the connections the new start() creates
+        zongji.stop();
+        zongji.start({
+          startAtEnd: true,
+          serverId: testDb.serverId(),
+          includeEvents: ['tablemap', 'writerows'],
+        });
+      } else if (readyCount === 2) {
+        // Wait past the old stop()'s 1s KILL timeout so its finish() has
+        // definitely fired, then force a metadata fetch on the new
+        // control connection
+        setTimeout(() => {
+          testDb.execute([
+            `INSERT INTO ${TEST_TABLE} (col) VALUES (33)`,
+          ], insertErr => {
+            if (insertErr) {
+              return test.fail(insertErr);
+            }
+            setTimeout(() => {
+              test.equal(errors.length, 0,
+                'no halt errors after immediate restart');
+              test.equal(events.length, 2, 'restarted stream delivers events');
+              test.equal(events[1].rows[0].col, 33);
+              test.end();
+            }, 1500);
+          });
+        }, 1200);
+      }
+    });
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+  });
+});

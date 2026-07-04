@@ -134,6 +134,24 @@ async function main() {
 
     // Give the binlog stream a moment to drain
     setTimeout(async () => {
+      // Refuse to write a truncated capture (e.g. slow server still
+      // delivering events when the drain timer fired)
+      const minimumCounts = {
+        TableMap: 4, WriteRows: 2, UpdateRows: 1, DeleteRows: 1,
+        Xid: 1, Query: 1, Rotate: 2,
+      };
+      const missing = Object.entries(minimumCounts).filter(([type, min]) =>
+        eventSummary.filter(name => name === type).length < min);
+      if (missing.length > 0) {
+        console.error('Capture incomplete, refusing to write fixture. ' +
+          'Missing:', missing.map(([type, min]) => `${type} (need ${min})`)
+          .join(', '));
+        console.error('Received:', eventSummary.join(', '));
+        zongji.stop();
+        admin.destroy();
+        process.exit(1);
+      }
+
       const tableSchemas = {};
       for (const entry of Object.values(zongji.tableMap)) {
         tableSchemas[entry.tableName] = entry.columnSchemas;
