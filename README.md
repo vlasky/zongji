@@ -153,6 +153,7 @@ Option Name | Type | Description
 `startAtEnd` | `boolean` | Pass `true` to only emit binlog events that occur after ZongJi's instantiation. Must be used in `start()` method for effect.<br>**Default:** `false`
 `filename` | `string` | Begin reading events from this binlog file. If specified together with `position`, will take precedence over `startAtEnd`.
 `position` | `integer` | Begin reading events from this position. Must be included with `filename`.
+`gtidSet` | `string` | Resume from an executed GTID set (e.g. a persisted `zongji.gtidSet`). The server locates the correct binlog file itself and skips transactions already in the set, so a checkpoint remains valid across failover to another server in the same replication topology. Requires `gtid_mode=ON` on the server. Pass `''` to stream the entire available history. Takes precedence over `filename`/`position` and `startAtEnd`.
 `includeEvents` | `[string]` | Array of event names to include<br>**Example:** `['writerows', 'updaterows', 'deleterows']`
 `excludeEvents` | `[string]` | Array of event names to exclude<br>**Example:** `['rotate', 'tablemap']`
 `includeSchema` | `object` | Object describing which databases and tables to include (Only for row events). Use database names as the key and pass an array of table names or `true` (for the entire database).<br>**Example:** ```{ 'my_database': ['allow_table', 'another_table'], 'another_db': true }```
@@ -176,6 +177,7 @@ Event name  | Description
 `gtid`      | GTID event with `gtid`, `sid`, `gno` properties
 `anonymousgtid` | Anonymous GTID event (same shape as `gtid`)
 `previousgtids` | Previous GTIDs event with `gtidSet` and `sids`
+`heartbeat` | Sent by the server instead of real events: while the connection idles, and in place of transactions skipped server-side during a GTID resume. Carries `binlogName`; `nextPosition` holds the advanced position.
 `tablemap`  | Before any row event (must be included for any other row events)
 `writerows` | Rows inserted, row data array available as `rows` property on event object
 `updaterows` | Rows changed, row data array available as `rows` property on event object
@@ -184,6 +186,18 @@ Event name  | Description
 `partialupdaterows` | Partial JSON update from MySQL 8.0+ servers with `binlog_row_value_options=PARTIAL_JSON`. ZongJi cannot decode the JSON diff format, so it emits an `error` (once per instance) naming the server setting responsible.
 
 When the server runs with `gtid_mode=ON`, every emitted event carries a `gtid` property (`'uuid:sequence'`) identifying the transaction it belongs to, tracked internally even if `gtid` events are excluded by `includeEvents`. It is `undefined` for anonymous transactions and for events seen before the stream's first GTID event. Note that non-row events arriving between a transaction's commit and the next transaction's GTID event (e.g. a rotate) still carry the previous transaction's `gtid`. Use it for checkpointing and deduplication.
+
+### GTID-based resume
+
+`zongji.gtidSet` exposes the executed GTID set as a string (e.g. `'3e11fa47-…:1-27'`): the set ZongJi started from, extended as each observed transaction *commits*, so a persisted value never claims a transaction whose row events were still in flight. Persist it alongside (or instead of) `filename`/`position` and resume with:
+
+```javascript
+zongji.start({ gtidSet: savedGtidSet, serverId: 5 });
+```
+
+Unlike file+position checkpoints, a GTID set is valid on any server in the same replication topology, which makes resuming across a failover possible. The server performs the skipping itself, so already-processed transactions are not resent.
+
+`zongji.gtidSet` is available when `start()` was given a `gtidSet`, with `startAtEnd` (seeded from the server's `gtid_executed`), or when reading from the start of a binlog file (seeded from its Previous_gtids event). It is `undefined` when resuming from an arbitrary mid-file file+position checkpoint, where no exact set can be known. If the server has purged binlogs still missing from your set, `start()` emits an error (code 1236) whose message names the purged GTIDs; a fresh snapshot is then required.
 
 **Event Methods**
 

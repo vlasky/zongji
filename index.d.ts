@@ -11,6 +11,15 @@ export interface ZongJiOptions {
   filename?: string;
   /** Binlog position to start from */
   position?: number;
+  /**
+   * Executed GTID set to resume from (e.g. a persisted zongji.gtidSet).
+   * Uses COM_BINLOG_DUMP_GTID: the server locates the right binlog file
+   * and skips transactions already in the set, so this works across
+   * failover to another server in the same topology. Requires
+   * gtid_mode=ON. '' streams the server's entire available history.
+   * Takes precedence over filename/position.
+   */
+  gtidSet?: string;
   /** If true, use non-blocking mode */
   nonBlock?: boolean;
   /** List of event types to include (e.g., ['tablemap', 'writerows']) */
@@ -303,6 +312,16 @@ export interface PartialUpdateRowsEvent extends BinlogEvent {
   getEventName(): 'partialupdaterows';
 }
 
+// Heartbeat event - sent while the connection idles (when a heartbeat
+// period is configured) and after transactions were skipped server-side
+// during a GTID dump; nextPosition carries the advanced position
+export interface HeartbeatEvent extends BinlogEvent {
+  getTypeName(): 'Heartbeat';
+  getEventName(): 'heartbeat';
+  /** Current binlog filename */
+  binlogName: string;
+}
+
 // Unknown event type
 export interface UnknownEvent extends BinlogEvent {
   getTypeName(): 'Unknown';
@@ -325,6 +344,7 @@ export type AnyBinlogEvent =
   | UpdateRowsEvent
   | TransactionPayloadEvent
   | PartialUpdateRowsEvent
+  | HeartbeatEvent
   | UnknownEvent;
 
 /** Union of all possible getTypeName() return values (e.g. 'Rotate', 'WriteRows') */
@@ -376,8 +396,17 @@ declare class ZongJi extends EventEmitter {
     filename?: string;
     position?: number;
     startAtEnd?: boolean;
+    gtidSet?: string;
     nonBlock?: boolean;
   };
+  /**
+   * The set of transactions this instance knows to be processed: the
+   * start() seed plus every transaction whose commit has been observed.
+   * Persist it and pass to start({ gtidSet }) to resume, including on a
+   * different server. Undefined when no exact seed was available (a
+   * mid-file file+position start).
+   */
+  readonly gtidSet: string | undefined;
   /** Current filter settings */
   filters: {
     includeEvents?: string[];
