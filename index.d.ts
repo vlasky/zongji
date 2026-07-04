@@ -23,13 +23,22 @@ export interface ZongJiOptions {
   excludeSchema?: Record<string, string[] | true>;
 }
 
-// Column metadata from INFORMATION_SCHEMA
+// Column metadata, either fetched from INFORMATION_SCHEMA or synthesised
+// from the binlog's own TableMap metadata (binlog_row_metadata=FULL).
+// In the synthesised form COLUMN_TYPE is approximate for character columns
+// (no display width) and COLLATION_NAME/COLUMN_COMMENT are not available.
 export interface ColumnSchema {
   COLUMN_NAME: string;
   COLLATION_NAME: string | null;
   CHARACTER_SET_NAME: string | null;
   COLUMN_COMMENT: string;
   COLUMN_TYPE: string;
+  /** Exact signedness from binlog metadata (MySQL 8.0+); numeric columns only */
+  UNSIGNED?: boolean;
+  /** ENUM value list from binlog metadata (binlog_row_metadata=FULL) */
+  ENUM_VALUES?: string[];
+  /** SET value list from binlog metadata (binlog_row_metadata=FULL) */
+  SET_VALUES?: string[];
 }
 
 // Column information from TableMap event
@@ -197,7 +206,34 @@ export interface TableMapEvent extends BinlogEvent {
   columnsMetadata: Record<string, unknown>[];
   /** Reference to the tableMap cache */
   tableMap: Record<number, TableMapEntry>;
-  /** Update column info after fetching from INFORMATION_SCHEMA */
+  /**
+   * Column names carried by the event itself (MySQL 8.0+ with
+   * binlog_row_metadata=FULL)
+   */
+  columnNames?: string[];
+  /**
+   * Per-column signedness from binlog metadata (MySQL 8.0+, MINIMAL and
+   * FULL); true = unsigned. Undefined entries are non-numeric columns.
+   */
+  signedness?: (boolean | undefined)[];
+  /**
+   * Primary key column indexes (0-based, all-columns numbering) from
+   * binlog_row_metadata=FULL
+   */
+  primaryKey?: number[];
+  /**
+   * Per-column visibility from binlog_row_metadata=FULL (MySQL 8.0.23+);
+   * false = INVISIBLE column
+   */
+  columnVisibility?: boolean[];
+  /**
+   * True when the event carries binlog_row_metadata=FULL metadata, in
+   * which case zongji decodes rows without querying INFORMATION_SCHEMA
+   */
+  hasSelfDescribingMetadata(): boolean;
+  /** Build ColumnSchema entries from the event's own metadata (FULL only) */
+  buildColumnSchemas(): ColumnSchema[];
+  /** Update column info after table metadata is available */
   updateColumnInfo(): void;
 }
 

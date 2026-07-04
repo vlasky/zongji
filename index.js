@@ -428,6 +428,20 @@ class ZongJi extends EventEmitter {
 
       switch (event.getTypeName()) {
         case 'TableMap': {
+          if (event.hasSelfDescribingMetadata()) {
+            // MySQL 8.0+ with binlog_row_metadata=FULL: the event itself
+            // carries complete column metadata as of binlog write time, so
+            // no INFORMATION_SCHEMA round-trip (and no connection pause) is
+            // needed. Rebuilt on every TableMap event, so ALTER TABLE never
+            // leaves stale columns behind.
+            this.tableMap[event.tableId] = {
+              columnSchemas: event.buildColumnSchemas(),
+              parentSchema: event.schemaName,
+              tableName: event.tableName,
+            };
+            event.updateColumnInfo();
+            break;
+          }
           const tableMap = this.tableMap[event.tableId];
           if (!tableMap || tableMap.tableName !== event.tableName || tableMap.columns.length !== event.columnCount) {
             if (!this.connection) return;

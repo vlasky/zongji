@@ -2,6 +2,10 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
+## Unreleased
+
+- Support `binlog_row_metadata=FULL` (MySQL 8.0+): TableMap events now parse the optional metadata block (column names, signedness, character sets, enum/set value lists, primary key, column visibility), and when it is complete ZongJi decodes rows entirely from the binlog stream with no `INFORMATION_SCHEMA` queries and no connection pauses. Each TableMap event rebuilds the table's metadata, so `ALTER TABLE` can no longer leave stale column definitions behind. Enum/set values containing commas or quotes decode correctly in this mode (the `INFORMATION_SCHEMA` path cannot represent them). Under the default `binlog_row_metadata=MINIMAL`, integer signedness now comes from the binlog instead of being inferred from the `COLUMN_TYPE` string. TableMap events expose `columnNames`, `signedness`, `primaryKey` and `columnVisibility` where available, and column schemas gain `UNSIGNED`, `ENUM_VALUES` and `SET_VALUES`.
+
 ## [0.7.1] - 2026-07-04
 
 - Fix `start()` calls made while a previous `start()` was still initialising silently discarding their filters. Since 0.7.0 filters are snapshotted and re-calling `start()` is the documented way to update them, but updates made between `start()` and the `ready` event were lost; consumers registering tables during boot (e.g. @vlasky/mysql-live-select) missed events for tables added in that window. Filters passed during initialisation now apply, exactly as when already running; stream options (filename/position/serverId) still come from the first call.

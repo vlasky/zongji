@@ -87,6 +87,11 @@ const { default: ZongJi } = await import('@vlasky/zongji');
   binlog_do_db     = employees   # Optional, limit which databases to log
   expire_logs_days = 10          # Optional, purge old logs
   max_binlog_size  = 100M        # Optional, limit log size
+
+  # Recommended on MySQL 8.0+: makes binlog events carry complete column
+  #   metadata (names, signedness, charsets, enum/set values), so ZongJi
+  #   decodes rows without querying INFORMATION_SCHEMA (see below)
+  binlog_row_metadata = FULL
   ```
 * Create an account with replication privileges, e.g. given privileges to account `zongji` (or any account that you use to read binary logs)
 
@@ -111,6 +116,15 @@ Option | Effect on row values
 `timezone` | Applied when converting `DATETIME` and `TIMESTAMP` values to `Date` objects.
 `decimalNumbers` | `DECIMAL` columns are returned as exact strings by default (e.g. `'-123.4500'`); set `decimalNumbers: true` to receive Numbers (may lose precision beyond 15 significant digits).
 `jsonStrings` | `JSON` columns are returned as parsed JavaScript values by default; set `jsonStrings: true` to receive JSON strings.
+
+### Table metadata source
+
+To decode row events, ZongJi needs each table's column metadata. It obtains this in one of two ways:
+
+* **From the binlog itself** (MySQL 8.0+ with `binlog_row_metadata=FULL`): every `TableMap` event carries column names, signedness, character sets and enum/set value lists. ZongJi decodes rows entirely from the stream: no `INFORMATION_SCHEMA` queries, no pausing the binlog connection, and no risk of the metadata being stale after an `ALTER TABLE` (each event describes the schema in force when it was written). Enum/set values containing commas or quotes also decode correctly only in this mode.
+* **From `INFORMATION_SCHEMA`** (all other cases, including MySQL 5.7 and the default `binlog_row_metadata=MINIMAL`): on the first event for each table, ZongJi briefly pauses the stream and fetches column metadata over its control connection. If the table is altered between the binlog write and the fetch, decoded rows may be misinterpreted until the next `TableMap` refresh.
+
+Setting `binlog_row_metadata=FULL` on the server is therefore recommended. It is a dynamic global variable (`SET GLOBAL binlog_row_metadata=FULL`) with negligible binlog size overhead for typical schemas. Even under `MINIMAL`, MySQL 8.0+ binlogs carry exact integer signedness, which ZongJi uses in preference to parsing the column definition.
 
 Each instance includes the following methods:
 
