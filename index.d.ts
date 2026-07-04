@@ -66,6 +66,8 @@ export interface BinlogEvent {
 
 // Rotate event - indicates binlog file change
 export interface RotateEvent extends BinlogEvent {
+  getTypeName(): 'Rotate';
+  getEventName(): 'rotate';
   /** Position in the new binlog file */
   position: number;
   /** Name of the new binlog file */
@@ -73,10 +75,15 @@ export interface RotateEvent extends BinlogEvent {
 }
 
 // Format Description event
-export interface FormatEvent extends BinlogEvent {}
+export interface FormatEvent extends BinlogEvent {
+  getTypeName(): 'Format';
+  getEventName(): 'format';
+}
 
 // GTID event
 export interface GtidEvent extends BinlogEvent {
+  getTypeName(): 'Gtid';
+  getEventName(): 'gtid';
   /** GTID flags */
   flags: number;
   /** Source UUID */
@@ -89,6 +96,8 @@ export interface GtidEvent extends BinlogEvent {
 
 // Anonymous GTID event
 export interface AnonymousGtidEvent extends BinlogEvent {
+  getTypeName(): 'AnonymousGtid';
+  getEventName(): 'anonymousgtid';
   /** GTID flags */
   flags: number;
   /** Source UUID */
@@ -111,6 +120,8 @@ export interface GtidSidEntry {
 }
 
 export interface PreviousGtidsEvent extends BinlogEvent {
+  getTypeName(): 'PreviousGtids';
+  getEventName(): 'previousgtids';
   /** Array of SID entries with their intervals */
   sids: GtidSidEntry[];
   /** GTID set as a formatted string */
@@ -119,12 +130,16 @@ export interface PreviousGtidsEvent extends BinlogEvent {
 
 // XID (commit) event
 export interface XidEvent extends BinlogEvent {
+  getTypeName(): 'Xid';
+  getEventName(): 'xid';
   /** Transaction ID for 2PC */
   xid: number | string;
 }
 
 // Query event
 export interface QueryEvent extends BinlogEvent {
+  getTypeName(): 'Query';
+  getEventName(): 'query';
   /** Slave proxy ID */
   slaveProxyId: number;
   /** Time in seconds the query took to execute */
@@ -145,6 +160,8 @@ export interface QueryEvent extends BinlogEvent {
 
 // IntVar event (for statement-based replication)
 export interface IntVarEvent extends BinlogEvent {
+  getTypeName(): 'IntVar';
+  getEventName(): 'intvar';
   /** Variable type: 1=LAST_INSERT_ID, 2=INSERT_ID */
   type: number;
   /** The integer value */
@@ -155,6 +172,8 @@ export interface IntVarEvent extends BinlogEvent {
 
 // TableMap event
 export interface TableMapEvent extends BinlogEvent {
+  getTypeName(): 'TableMap';
+  getEventName(): 'tablemap';
   /** Internal table ID */
   tableId: number;
   /** Table flags */
@@ -200,24 +219,47 @@ export interface RowsEvent extends BinlogEvent {
 
 // WriteRows event (INSERT)
 export interface WriteRowsEvent extends RowsEvent {
+  getTypeName(): 'WriteRows';
+  getEventName(): 'writerows';
   /** Array of inserted rows */
   rows: RowData[];
 }
 
 // DeleteRows event (DELETE)
 export interface DeleteRowsEvent extends RowsEvent {
+  getTypeName(): 'DeleteRows';
+  getEventName(): 'deleterows';
   /** Array of deleted rows */
   rows: RowData[];
 }
 
 // UpdateRows event (UPDATE)
 export interface UpdateRowsEvent extends RowsEvent {
+  getTypeName(): 'UpdateRows';
+  getEventName(): 'updaterows';
   /** Array of updated rows with before/after values */
   rows: UpdateRowData[];
 }
 
+// Transaction Payload event (MySQL 8.0.20+, binlog_transaction_compression=ON)
+// The compressed transaction body cannot be decoded and is skipped.
+export interface TransactionPayloadEvent extends BinlogEvent {
+  getTypeName(): 'TransactionPayload';
+  getEventName(): 'transactionpayload';
+}
+
+// Partial Update Rows event (MySQL 8.0+, binlog_row_value_options=PARTIAL_JSON)
+// The partial JSON diff body cannot be decoded and is skipped.
+export interface PartialUpdateRowsEvent extends BinlogEvent {
+  getTypeName(): 'PartialUpdateRows';
+  getEventName(): 'partialupdaterows';
+}
+
 // Unknown event type
-export interface UnknownEvent extends BinlogEvent {}
+export interface UnknownEvent extends BinlogEvent {
+  getTypeName(): 'Unknown';
+  getEventName(): 'unknown';
+}
 
 // Union type of all event types
 export type AnyBinlogEvent =
@@ -233,7 +275,39 @@ export type AnyBinlogEvent =
   | WriteRowsEvent
   | DeleteRowsEvent
   | UpdateRowsEvent
+  | TransactionPayloadEvent
+  | PartialUpdateRowsEvent
   | UnknownEvent;
+
+/** Union of all possible getTypeName() return values (e.g. 'Rotate', 'WriteRows') */
+export type BinlogEventTypeName = ReturnType<AnyBinlogEvent['getTypeName']>;
+
+/** Union of all possible getEventName() return values (e.g. 'rotate', 'writerows') */
+export type BinlogEventName = ReturnType<AnyBinlogEvent['getEventName']>;
+
+/**
+ * Look up the concrete event type for a getTypeName() value.
+ * Enables narrowing AnyBinlogEvent via getTypeName(), e.g.:
+ *
+ *   function isEventType<N extends BinlogEventTypeName>(
+ *     event: AnyBinlogEvent, name: N
+ *   ): event is BinlogEventByTypeName<N> {
+ *     return event.getTypeName() === name;
+ *   }
+ *
+ * (A plain `switch (event.getTypeName())` cannot narrow `event` because
+ * TypeScript does not narrow unions on method-call discriminants.)
+ */
+export type BinlogEventByTypeName<N extends BinlogEventTypeName> = Extract<
+  AnyBinlogEvent,
+  { getTypeName(): N }
+>;
+
+/** Look up the concrete event type for a getEventName() value */
+export type BinlogEventByName<N extends BinlogEventName> = Extract<
+  AnyBinlogEvent,
+  { getEventName(): N }
+>;
 
 // Connection options - can be mysql2 options, Connection, or Pool
 export type ZongJiDsn = string | ConnectionOptions | PoolOptions | Connection | Pool;

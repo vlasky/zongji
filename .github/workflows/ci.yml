@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly canary against mysql2@latest (Mondays 06:00 UTC)
+    - cron: '0 6 * * 1'
+
+jobs:
+  lint:
+    name: Lint and type-check
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check TypeScript definitions
+        run: npm run checkjs
+
+  test:
+    name: Test (MySQL ${{ matrix.mysql-version }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql-version: ['5.7', '8.0', '8.4']
+        node-version: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Service containers cannot pass command-line args to the server,
+      # and zongji needs binlog options, so start MySQL manually.
+      - name: Start MySQL ${{ matrix.mysql-version }}
+        run: |
+          docker run -d --name mysql \
+            -p 3306:3306 \
+            -e MYSQL_ROOT_PASSWORD=secret \
+            mysql:${{ matrix.mysql-version }} \
+            --server-id=1 \
+            --log-bin=/var/lib/mysql/mysql-bin.log \
+            --binlog-format=row
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mysql mysqladmin ping -u root -psecret --silent 2>/dev/null; then
+              echo "MySQL is ready (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL did not become ready within 120 seconds" >&2
+          exit 1
+
+      - name: Run tests
+        run: npm run test:only
+
+      - name: Dump MySQL logs on failure
+        if: failure()
+        run: docker logs mysql
+
+  mysql2-latest:
+    name: Canary (mysql2@latest, MySQL 8.4, Node 22)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # zongji relies on mysql2 internal APIs (addCommand, handlePacket,
+      # packet.isEOF); this canary catches upstream breakage early.
+      - name: Upgrade to mysql2@latest
+        run: |
+          npm install mysql2@latest
+          echo "mysql2 version under test:"
+          npm ls mysql2
+
+      - name: Start MySQL 8.4
+        run: |
+          docker run -d --name mysql \
+            -p 3306:3306 \
+            -e MYSQL_ROOT_PASSWORD=secret \
+            mysql:8.4 \
+            --server-id=1 \
+            --log-bin=/var/lib/mysql/mysql-bin.log \
+            --binlog-format=row
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mysql mysqladmin ping -u root -psecret --silent 2>/dev/null; then
+              echo "MySQL is ready (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL did not become ready within 120 seconds" >&2
+          exit 1
+
+      - name: Run tests
+        run: npm run test:only
+
+      - name: Dump MySQL logs on failure
+        if: failure()
+        run: docker logs mysql
