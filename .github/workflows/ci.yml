@@ -65,8 +65,12 @@ jobs:
 
       - name: Wait for MySQL to be ready
         run: |
+          # Check over TCP with a real query: the MySQL entrypoint runs a
+          # temporary socket-only server during initialisation, so a plain
+          # socket ping reports ready before the real server listens on 3306.
           for i in $(seq 1 60); do
-            if docker exec mysql mysqladmin ping -u root -psecret --silent 2>/dev/null; then
+            if docker exec mysql mysql --protocol=tcp -h127.0.0.1 -uroot -psecret \
+                -e 'SELECT 1' >/dev/null 2>&1; then
               echo "MySQL is ready (attempt $i)"
               exit 0
             fi
@@ -116,8 +120,12 @@ jobs:
 
       - name: Wait for MySQL to be ready
         run: |
+          # Check over TCP with a real query: the MySQL entrypoint runs a
+          # temporary socket-only server during initialisation, so a plain
+          # socket ping reports ready before the real server listens on 3306.
           for i in $(seq 1 60); do
-            if docker exec mysql mysqladmin ping -u root -psecret --silent 2>/dev/null; then
+            if docker exec mysql mysql --protocol=tcp -h127.0.0.1 -uroot -psecret \
+                -e 'SELECT 1' >/dev/null 2>&1; then
               echo "MySQL is ready (attempt $i)"
               exit 0
             fi

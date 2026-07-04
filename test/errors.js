@@ -14,11 +14,15 @@ tap.test('Connect to an invalid host', test => {
 
   let ended = false;
   // ZongJi creates two connections (ctrlConnection + connection), both will
-  // fail with ENOTFOUND. We must handle all errors to prevent unhandled rejections.
+  // fail to connect. We must handle all errors to prevent unhandled rejections.
+  // The exact code depends on the resolver: macOS reports ENOTFOUND, GitHub
+  // Actions runners report EAI_AGAIN for nonexistent hostnames.
   zongji.on('error', function(error) {
     if (!ended) {
       ended = true;
-      test.ok(['ENOTFOUND', 'ETIMEDOUT'].indexOf(error.code) !== -1);
+      test.ok(
+        ['ENOTFOUND', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNREFUSED'].includes(error.code),
+        `connection failure code, got: ${error.code}`);
       zongji.stop();
       test.end();
     }

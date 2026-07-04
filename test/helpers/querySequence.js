@@ -14,7 +14,10 @@ export default function querySequence(connection, debug, queries, callback) {
     return function() {
       debug && console.log('Query Sequence', index, queryStr);
       connection.query(queryStr, function(err, rows) {
-        if (err) callback(err);
+        if (err) {
+          callback(err);
+          return;
+        }
         results.push(rows);
         if (index < sequence.length - 1) {
           sequence[index + 1]();
