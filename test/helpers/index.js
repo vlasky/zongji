@@ -117,6 +117,30 @@ export function serverId() {
   return id;
 }
 
+// Ensures gtid_mode=ON (stepwise transitions as MySQL requires), then
+// calls done. No-op when already enabled.
+export function ensureGtidMode(done) {
+  execute(['SELECT @@GLOBAL.gtid_mode AS gtid_mode'], (err, results) => {
+    if (err) {
+      throw err;
+    }
+    if (results[0][0].gtid_mode === 'ON') {
+      return done();
+    }
+    execute([
+      'SET GLOBAL enforce_gtid_consistency = ON',
+      'SET GLOBAL gtid_mode = OFF_PERMISSIVE',
+      'SET GLOBAL gtid_mode = ON_PERMISSIVE',
+      'SET GLOBAL gtid_mode = ON',
+    ], enableErr => {
+      if (enableErr) {
+        throw enableErr;
+      }
+      done();
+    });
+  });
+}
+
 export function strRepeat(pattern, count) {
   if (count < 1) return '';
   let result = '';

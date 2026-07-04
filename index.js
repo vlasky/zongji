@@ -1,6 +1,7 @@
 import mysql from 'mysql2';
 import { EventEmitter } from 'events';
 import initBinlogClass from './lib/sequence/binlog.js';
+import { GtidSet } from './lib/gtid_set.js';
 
 const ConnectionConfigMap = {
   'Connection': obj => obj.config,
@@ -36,6 +37,9 @@ class ZongJi extends EventEmitter {
     this.tableMap = {};
     this._warnedUnsupported = new Set();
     this._currentGtid = undefined;
+    this._executedGtids = null;
+    this._pendingGtid = undefined;
+    this._seedGtidsFromStream = false;
     this.ready = false;
     this.stopped = false;
     this._starting = false;
@@ -192,6 +196,60 @@ class ZongJi extends EventEmitter {
       });
   }
 
+  // The set of transactions this instance knows to be processed: the
+  // start() seed plus every transaction whose commit has been observed.
+  // Persist it and pass to start({ gtidSet }) to resume, including on a
+  // different server in the same replication topology. Undefined when no
+  // exact seed was available (see start()).
+  get gtidSet() {
+    return this._executedGtids ? this._executedGtids.toString() : undefined;
+  }
+
+  // Called from the packet layer (before event filtering) for
+  // GTID-relevant events. A transaction's GTID enters the executed set
+  // only once its commit marker has been seen (Xid, or a Query event
+  // other than BEGIN, e.g. DDL or COMMIT), so a persisted zongji.gtidSet
+  // never claims a transaction whose row events were still in flight.
+  _trackGtidProgress(eventName, event) {
+    const fold = () => {
+      if (this._pendingGtid !== undefined && this._executedGtids) {
+        this._executedGtids.add(this._pendingGtid);
+      }
+      this._pendingGtid = undefined;
+    };
+
+    switch (eventName) {
+      case 'gtid':
+        // A new transaction implies the previous one committed, so this
+        // also covers commit markers hidden by event filtering
+        fold();
+        this._pendingGtid = event.gtid;
+        break;
+      case 'anonymousgtid':
+        fold();
+        break;
+      case 'xid':
+        fold();
+        break;
+      case 'query':
+        if (event.query !== 'BEGIN') {
+          fold();
+        }
+        break;
+      case 'previousgtids':
+        // When dumping from the start of a binlog file, its Previous_gtids
+        // event is the exact "everything before this point" seed
+        if (this._seedGtidsFromStream && this._executedGtids === null) {
+          try {
+            this._executedGtids = GtidSet.parse(event.gtidSet);
+          } catch {
+            // Leave unseeded; gtidSet stays undefined
+          }
+        }
+        break;
+    }
+  }
+
   _findBinlogEnd(next) {
     this.ctrlConnection.query('SHOW BINARY LOGS', (err, rows) => {
       if (err) {
@@ -264,6 +322,7 @@ class ZongJi extends EventEmitter {
     filename,
     position,
     startAtEnd,
+    gtidSet,
     nonBlock,
   } = {}) {
     this.options = {
@@ -271,6 +330,7 @@ class ZongJi extends EventEmitter {
       filename,
       position,
       startAtEnd,
+      gtidSet,
       nonBlock,
     };
   }
@@ -363,6 +423,28 @@ class ZongJi extends EventEmitter {
     // A resumed stream must not attribute early events to a GTID seen
     // before the restart
     this._currentGtid = undefined;
+    this._pendingGtid = undefined;
+
+    // Executed-GTID-set tracking (drives the zongji.gtidSet checkpoint).
+    // Exact seeds: an explicit start set, the server's gtid_executed for
+    // startAtEnd (fetched below), or the stream's first Previous_gtids
+    // event when dumping from the start of a binlog file. An arbitrary
+    // mid-file file+position start has no exact seed, so gtidSet stays
+    // undefined there.
+    this._executedGtids = null;
+    this._seedGtidsFromStream = false;
+    if (options.gtidSet != null) {
+      try {
+        this._executedGtids = GtidSet.parse(options.gtidSet);
+      } catch (err) {
+        this._starting = false;
+        this.emit('error', err);
+        return;
+      }
+    } else if (!options.startAtEnd &&
+        (options.position === undefined || options.position <= 4)) {
+      this._seedGtidsFromStream = true;
+    }
 
     this.stopped = false;
 
@@ -403,6 +485,25 @@ class ZongJi extends EventEmitter {
 
         resolve();
       });
+    };
+
+    // For startAtEnd the server's own executed set is the exact seed for
+    // zongji.gtidSet ("everything up to now"); transactions racing between
+    // this query and the dump start are streamed and merge idempotently
+    const seedGtidsFromServer = (resolve, reject) => {
+      this.ctrlConnection.query(
+        'SELECT @@GLOBAL.gtid_executed AS gtidExecuted', (err, rows) => {
+          if (err) {
+            return reject(err);
+          }
+          try {
+            this._executedGtids =
+              GtidSet.parse(rows[0].gtidExecuted.replace(/\s/g, ''));
+          } catch (parseErr) {
+            return reject(parseErr);
+          }
+          resolve();
+        });
     };
 
     // Attach the current transaction's GTID (tracked at the packet layer,
@@ -500,6 +601,9 @@ class ZongJi extends EventEmitter {
 
     if (this.options.startAtEnd) {
       promises.push(new Promise(findBinlogEnd));
+      if (this._executedGtids === null) {
+        promises.push(new Promise(seedGtidsFromServer));
+      }
     }
 
     Promise.all(promises)

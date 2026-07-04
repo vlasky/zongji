@@ -522,25 +522,14 @@ tap.test('GTID events', test => {
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => zongji.stop());
 
-  const ensureGtidQueries = [
-    'SET GLOBAL enforce_gtid_consistency = ON',
-    'SET GLOBAL gtid_mode = OFF_PERMISSIVE',
-    'SET GLOBAL gtid_mode = ON_PERMISSIVE',
-    'SET GLOBAL gtid_mode = ON',
-  ];
-
-  testDb.execute([
-    'SELECT @@GLOBAL.gtid_mode AS gtid_mode',
+  testDb.ensureGtidMode(() => testDb.execute([
     `DROP TABLE IF EXISTS ${TEST_TABLE}`,
     `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
-  ], (err, results) => {
+  ], err => {
     if (err) {
       return test.fail(err);
     }
-    const gtidMode = results[0][0].gtid_mode;
-    const enableGtid = gtidMode === 'ON' ? [] : ensureGtidQueries;
-
-    const runTest = () => {
+    {
 
       let seenGtid = false;
       zongji.start({
@@ -568,19 +557,8 @@ tap.test('GTID events', test => {
           }
         });
       });
-    };
-
-    if (enableGtid.length === 0) {
-      return runTest();
     }
-
-    testDb.execute(enableGtid, enableErr => {
-      if (enableErr) {
-        return test.fail(enableErr);
-      }
-      runTest();
-    });
-  });
+  }));
 });
 
 tap.test('Table name containing quote characters', test => {
@@ -770,25 +748,14 @@ tap.test('event.gtid attached to row events', test => {
   zongji.on('binlog', evt => events.push(evt));
   zongji.on('error', err => test.fail(err));
 
-  const ensureGtidQueries = [
-    'SET GLOBAL enforce_gtid_consistency = ON',
-    'SET GLOBAL gtid_mode = OFF_PERMISSIVE',
-    'SET GLOBAL gtid_mode = ON_PERMISSIVE',
-    'SET GLOBAL gtid_mode = ON',
-  ];
-
-  testDb.execute([
-    'SELECT @@GLOBAL.gtid_mode AS gtid_mode',
+  testDb.ensureGtidMode(() => testDb.execute([
     `DROP TABLE IF EXISTS ${TEST_TABLE}`,
     `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
-  ], (err, results) => {
+  ], err => {
     if (err) {
       return test.fail(err);
     }
-    const enableGtid =
-      results[0][0].gtid_mode === 'ON' ? [] : ensureGtidQueries;
-
-    const runTest = () => {
+    {
       zongji.start({
         startAtEnd: true,
         serverId: testDb.serverId(),
@@ -823,18 +790,8 @@ tap.test('event.gtid attached to row events', test => {
           });
         });
       });
-    };
-
-    if (enableGtid.length === 0) {
-      return runTest();
     }
-    testDb.execute(enableGtid, enableErr => {
-      if (enableErr) {
-        return test.fail(enableErr);
-      }
-      runTest();
-    });
-  });
+  }));
 });
 
 // Regression: filters passed to a start() issued while a previous start()
