@@ -250,7 +250,8 @@ tap.test('Calling start() twice does not duplicate the binlog stream', test => {
       serverId: testDb.serverId(),
       includeEvents: ['tablemap', 'writerows'],
     };
-    // Second synchronous call must be a no-op while the first initialises
+    // The second call supersedes the first while it initialises; exactly
+    // one binlog dump command may be enqueued
     zongji.start(options);
     zongji.start(options);
 
@@ -338,4 +339,54 @@ tap.test('Errors throw when no error listener is ever attached', test => {
         'connection error surfaced as uncaught exception');
       test.end();
     });
+});
+
+tap.test('stop() then start() while initialising restarts cleanly', test => {
+  const TEST_TABLE = 'restart_during_init_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => {
+    if (ACCEPTABLE_ERRORS.indexOf(err.code) === -1) {
+      test.fail(err);
+    }
+  });
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    const options = {
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    };
+
+    // Stop while the first start() is still initialising, then restart in
+    // the same tick; the restart must win (previously it was dropped)
+    zongji.start(options);
+    zongji.stop();
+    zongji.start(options);
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (21)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.equal(events.length, 2, 'restarted stream delivers events');
+          test.equal(events[1].rows[0].col, 21);
+          test.end();
+        }, 1500);
+      });
+    });
+  });
 });

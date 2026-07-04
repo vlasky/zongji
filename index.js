@@ -38,6 +38,7 @@ class ZongJi extends EventEmitter {
     this.ready = false;
     this.stopped = false;
     this._starting = false;
+    this._startEpoch = 0;
     this.useChecksum = false;
 
     this._dsn = dsn;
@@ -339,12 +340,17 @@ class ZongJi extends EventEmitter {
       return;
     }
 
-    // A start() is already initialising; a second concurrent call would
-    // enqueue a duplicate binlog dump command on the same connection
-    if (this._starting) {
+    // A duplicate start() while one is already initialising is ignored;
+    // the first call completes. But if stop() intervened, this start()
+    // must proceed as a restart: the epoch below makes the stale
+    // initialisation chain abort, so exactly one binlog dump command is
+    // ever enqueued.
+    if (this._starting && !this.stopped) {
       return;
     }
     this._starting = true;
+    this._startEpoch += 1;
+    const epoch = this._startEpoch;
 
     this.stopped = false;
 
@@ -432,8 +438,13 @@ class ZongJi extends EventEmitter {
 
     Promise.all(promises)
       .then(() => {
+        // Abort if a newer start() superseded this one (after a stop())
+        // while promises were pending
+        if (epoch !== this._startEpoch) {
+          return;
+        }
         this._starting = false;
-        // Check if stop() was called while promises were pending
+        // Abort if stop() was called while promises were pending
         if (this.stopped) {
           return;
         }
@@ -442,8 +453,9 @@ class ZongJi extends EventEmitter {
         this.ready = true;
         this.emit('ready');
 
-        // Final check right before addCommand - connection may have been destroyed
-        if (this.stopped) {
+        // Final check right before addCommand - connection may have been
+        // destroyed or this start() superseded by a ready handler
+        if (this.stopped || epoch !== this._startEpoch) {
           return;
         }
 
@@ -471,6 +483,9 @@ class ZongJi extends EventEmitter {
         this.connection.addCommand(new this.BinlogClass(binlogHandler));
       })
       .catch(err => {
+        if (epoch !== this._startEpoch) {
+          return;
+        }
         this._starting = false;
         this.emit('error', err);
       });
@@ -486,10 +501,19 @@ class ZongJi extends EventEmitter {
       return;
     }
 
+    // Errors emitted by a connection we are deliberately destroying are
+    // teardown noise (e.g. in-flight queries failing with
+    // ERR_STREAM_WRITE_AFTER_END); do not forward them to the caller
+    const silenceErrors = (conn) => {
+      conn.removeAllListeners('error');
+      conn.on('error', () => {});
+    };
+
     // Binary log connection does not end with destroy()
     let connectionThreadId = null;
     if (this.connection) {
       connectionThreadId = this.connection.threadId;
+      silenceErrors(this.connection);
       this.connection.destroy();
       // @ts-ignore - internal mysql2 API
       if (this.connection.stream && typeof this.connection.stream.unref === 'function') {
@@ -503,6 +527,7 @@ class ZongJi extends EventEmitter {
       if (finished) return;
       finished = true;
       if (this.ctrlConnectionOwner && this.ctrlConnection) {
+        silenceErrors(this.ctrlConnection);
         this.ctrlConnection.destroy();
         // @ts-ignore - internal mysql2 API
         if (this.ctrlConnection.stream && typeof this.ctrlConnection.stream.unref === 'function') {
