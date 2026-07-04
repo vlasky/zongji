@@ -2,7 +2,9 @@
 // test/fixtures/*.json so the parsing layer can be tested offline
 // (see test/parser.js). Regenerate with:
 //
-//   node scripts/capture-fixtures.js [suffix]
+//   node scripts/capture-fixtures.js [suffix] [--full]
+//
+// --full captures with binlog_row_metadata=FULL (restored afterwards).
 //
 // against a MySQL server started like the test containers
 // (docker-compose up -d mysql84). Environment overrides:
@@ -14,7 +16,12 @@ import mysql from 'mysql2';
 import ZongJi from '../index.js';
 
 const FIXTURE_DB = 'zongji_fixture_capture';
-const SUFFIX = process.argv[2] || 'mysql';
+const args = process.argv.slice(2).filter(arg => arg !== '--full');
+// --full captures with binlog_row_metadata=FULL (MySQL 8.0+), making
+// TableMap events self-describing; the fixture then omits tableSchemas
+// so tests prove decoding works without INFORMATION_SCHEMA
+const FULL_METADATA = process.argv.includes('--full');
+const SUFFIX = args[0] || 'mysql';
 
 const connectionSettings = {
   host: process.env.MYSQL_HOST || 'localhost',
@@ -31,7 +38,7 @@ const CAPTURE_TABLE = 'capture_types';
 const captureStatements = [
   'SET @@session.time_zone = "+00:00"',
   `CREATE TABLE ${CAPTURE_TABLE} (
-    id INT,
+    id INT PRIMARY KEY,
     i_big BIGINT,
     u_big BIGINT UNSIGNED,
     dec_col DECIMAL(30, 10),
@@ -49,10 +56,12 @@ const captureStatements = [
     t TIME(3),
     y YEAR,
     e ENUM('a', 'b', 'c'),
+    e2 ENUM('a,b', 'c''d', 'plain'),
     s SET('x', 'y', 'z'),
     bt BIT(10),
     js JSON,
-    geo GEOMETRY
+    geo GEOMETRY,
+    txt_latin1 TEXT CHARACTER SET latin1
   )`,
   `INSERT INTO ${CAPTURE_TABLE} VALUES (
     1,
@@ -73,10 +82,12 @@ const captureStatements = [
     '-01:02:03.500',
     2024,
     'b',
+    'c''d',
     'x,z',
     b'1000000001',
     '{"a": 1, "big": 9223372036854775807, "arr": ["x", true, null], "d": 1.5}',
-    ST_GeomFromText('POINT(1 2)')
+    ST_GeomFromText('POINT(1 2)'),
+    'café ñ'
   )`,
   `UPDATE ${CAPTURE_TABLE} SET id = 2, vc = 'updated' WHERE id = 1`,
   `DELETE FROM ${CAPTURE_TABLE} WHERE id = 2`,
@@ -96,6 +107,20 @@ async function main() {
   await query(admin, `DROP DATABASE IF EXISTS ${FIXTURE_DB}`);
   await query(admin, `CREATE DATABASE ${FIXTURE_DB}`);
   const versionRows = await query(admin, 'SELECT VERSION() AS version');
+
+  let originalRowMetadata;
+  if (FULL_METADATA) {
+    const rows = await query(admin,
+      'SELECT @@global.binlog_row_metadata AS setting');
+    originalRowMetadata = rows[0].setting;
+    await query(admin, 'SET GLOBAL binlog_row_metadata = FULL');
+  }
+  const restoreRowMetadata = async () => {
+    if (FULL_METADATA && originalRowMetadata !== undefined) {
+      await query(admin,
+        `SET GLOBAL binlog_row_metadata = ${originalRowMetadata}`);
+    }
+  };
 
   const zongji = new ZongJi({ ...connectionSettings, database: FIXTURE_DB });
   const packets = [];
@@ -148,19 +173,25 @@ async function main() {
           .join(', '));
         console.error('Received:', eventSummary.join(', '));
         zongji.stop();
+        await restoreRowMetadata();
         admin.destroy();
         process.exit(1);
       }
 
+      // In FULL metadata mode the TableMap events are self-describing;
+      // omitting the INFORMATION_SCHEMA snapshot lets tests prove that
       const tableSchemas = {};
-      for (const entry of Object.values(zongji.tableMap)) {
-        tableSchemas[entry.tableName] = entry.columnSchemas;
+      if (!FULL_METADATA) {
+        for (const entry of Object.values(zongji.tableMap)) {
+          tableSchemas[entry.tableName] = entry.columnSchemas;
+        }
       }
 
       const fixture = {
         description:
           'Raw binlog packet payloads captured by scripts/capture-fixtures.js',
         serverVersion: versionRows[0].version,
+        binlogRowMetadata: FULL_METADATA ? 'FULL' : 'MINIMAL',
         useChecksum: zongji.useChecksum,
         connectionConfig: {
           timezone: connectionSettings.timezone,
@@ -181,6 +212,7 @@ async function main() {
 
       zongji.stop();
       await query(admin, `DROP DATABASE IF EXISTS ${FIXTURE_DB}`);
+      await restoreRowMetadata();
       admin.destroy();
     }, 2000);
   });

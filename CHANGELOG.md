@@ -2,6 +2,10 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
+## Unreleased
+
+- Support `binlog_row_metadata=FULL` (MySQL 8.0+): TableMap events now parse the optional metadata block (column names, signedness, character sets, enum/set value lists, primary key, column visibility), and when it is complete ZongJi decodes rows entirely from the binlog stream with no `INFORMATION_SCHEMA` queries and no connection pauses. Each TableMap event rebuilds the table's metadata, so `ALTER TABLE` can no longer leave stale column definitions behind. Enum/set values containing commas or quotes decode correctly in this mode (the `INFORMATION_SCHEMA` path cannot represent them). Under the default `binlog_row_metadata=MINIMAL`, integer signedness now comes from the binlog instead of being inferred from the `COLUMN_TYPE` string. TableMap events expose `columnNames`, `signedness`, `primaryKey` and `columnVisibility` where available, and column schemas gain `UNSIGNED`, `ENUM_VALUES` and `SET_VALUES`.
+
 ## [0.7.0] - 2026-07-04
 
 ### Breaking changes

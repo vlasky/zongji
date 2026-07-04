@@ -286,6 +286,11 @@ tap.test('Dead control connection during metadata fetch emits error', test => {
   const errors = [];
   zongji.on('error', err => errors.push(err));
 
+  // This test exercises the INFORMATION_SCHEMA fetch path, which only runs
+  // when TableMap events are not self-describing. MINIMAL is the server
+  // default; pin it in case the server was left on FULL. Best-effort: the
+  // variable does not exist before MySQL 8.0 (where MINIMAL is all there is).
+  testDb.execute(['SET GLOBAL binlog_row_metadata = MINIMAL'], () => {
   testDb.execute([
     `DROP TABLE IF EXISTS ${TEST_TABLE}`,
     `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
@@ -325,6 +330,7 @@ tap.test('Dead control connection during metadata fetch emits error', test => {
         }, 500);
       });
     });
+  });
   });
 });
 
