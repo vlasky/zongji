@@ -23,3 +23,10 @@ npm-install-stamp
 # Local override files
 *.local.md
 
+
+# Development-only files
+docker-compose.yml
+docker-test.sh
+eslint.config.js
+jsconfig.json
+scripts/
