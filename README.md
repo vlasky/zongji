@@ -54,6 +54,14 @@ import ZongJi from '@vlasky/zongji';
 
 For a complete implementation see [`example.js`](example.js)...
 
+## Module format
+
+Since v0.6.0 this package is ESM-only. CommonJS projects can load it on Node.js >= 20.17 or >= 22.12, where `require()` of ES modules is supported, or on any supported version via dynamic `import()`:
+
+```javascript
+const { default: ZongJi } = await import('@vlasky/zongji');
+```
+
 ## Installation
 
 * Requires Node.js v18+
@@ -93,7 +101,14 @@ The `ZongJi` constructor accepts one argument of either:
 
 If a `Connection` or `Pool` object is passed to the constructor, it will not be destroyed/ended by Zongji's `stop()` method.
 
-The `dateStrings` and `timezone` configuration options from the connection details are respected for date/time value handling.
+Binlog row values follow the same [mysql2 connection options](https://sidorares.github.io/node-mysql2/docs/api-and-configurations) as query results, so CDC events and queries on the same connection agree:
+
+Option | Effect on row values
+-------|---------------------
+`dateStrings` | `DATE`, `DATETIME` and `TIMESTAMP` columns are returned as strings instead of `Date` objects.
+`timezone` | Applied when converting `DATETIME` and `TIMESTAMP` values to `Date` objects.
+`decimalNumbers` | `DECIMAL` columns are returned as exact strings by default (e.g. `'-123.4500'`); set `decimalNumbers: true` to receive Numbers (may lose precision beyond 15 significant digits).
+`jsonStrings` | `JSON` columns are returned as parsed JavaScript values by default; set `jsonStrings: true` to receive JSON strings.
 
 Each instance includes the following methods:
 
@@ -112,6 +127,8 @@ Event Name | Description
 `error`    | Every error will be caught by this event.
 `stopped`  | Emitted when ZongJi connection is stopped (ZongJi#stop is called).
 
+Always attach an `error` listener. Errors that occur before a listener attaches (for example, a connection failure in the same tick as construction) are buffered and re-delivered to the first `error` listener. If no listener is ever attached, the buffered errors are thrown, following Node's default behaviour for unhandled `'error'` events.
+
 **Options available:**
 
 Option Name | Type | Description
@@ -127,6 +144,8 @@ Option Name | Type | Description
 
 * By default, all events and schema are emitted.
 * `excludeSchema` and `excludeEvents` take precedence over `includeSchema` and `includeEvents`, respectively.
+* Calling `start()` while a previous `start()` is still initialising is ignored and the first call completes. The exception is after an intervening `stop()`: the new `start()` then restarts cleanly, and exactly one binlog stream is opened.
+* Calling `start()` while ZongJi is already running does not reconnect; it only updates the event and schema filters from the given options.
 
 **Supported Binlog Events:**
 
@@ -145,6 +164,8 @@ Event name  | Description
 `writerows` | Rows inserted, row data array available as `rows` property on event object
 `updaterows` | Rows changed, row data array available as `rows` property on event object
 `deleterows` | Rows deleted, row data array available as `rows` property on event object
+`transactionpayload` | Compressed transaction from MySQL 8.0.20+ servers with `binlog_transaction_compression=ON`. ZongJi cannot decode the row events inside it, so it emits an `error` (once per instance) naming the server setting responsible.
+`partialupdaterows` | Partial JSON update from MySQL 8.0+ servers with `binlog_row_value_options=PARTIAL_JSON`. ZongJi cannot decode the JSON diff format, so it emits an `error` (once per instance) naming the server setting responsible.
 
 **Event Methods**
 

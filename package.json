@@ -5,9 +5,16 @@
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
   "scripts": {
     "pretest": "bash scripts/start-mysql.sh",
     "test": "tap --bail --disable-coverage --jobs=1 test/*.js",
+    "test:only": "tap --bail --disable-coverage --jobs=1 test/*.js",
     "lint": "eslint .",
     "checkjs": "tsc --project jsconfig.json"
   },

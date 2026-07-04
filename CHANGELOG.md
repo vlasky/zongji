@@ -2,6 +2,25 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
+## Unreleased (0.7.0)
+
+### Breaking changes
+
+- DECIMAL columns now emit exact string values (e.g. `'-123.4500'`) instead of lossy floats, matching mysql2 query results. Migration: set `decimalNumbers: true` on the connection options passed to ZongJi to restore Numbers.
+- JSON columns now emit parsed JavaScript values instead of JSON strings, matching mysql2 query results. Migration: set `jsonStrings: true` on the connection options passed to ZongJi to restore strings. In string mode, output now uses MySQL's own formatting (spaces after `:` and `,`) and 64-bit integers appear as exact raw numerals rather than lossy doubles.
+- Event and schema filters are snapshotted when `start()` is called; mutating the arrays or objects you passed in no longer changes filtering afterwards. Migration: call `start()` again with the new filters (the documented way to update them).
+
+### Other changes
+
+- Fix SQL injection in the table metadata query: schema and table names from TableMap events are now bound via a cached prepared statement (`execute()`) instead of being spliced into SQL text
+- Replace the big-integer dependency with native BigInt (one fewer dependency); also fixes silent corruption of 64-bit integers inside JSON columns beyond 2^53, which now follow the same exact Number-or-string rule as BIGINT columns
+- Emit an error (once per instance per type) when the server sends undecodable TRANSACTION_PAYLOAD_EVENT (`binlog_transaction_compression=ON`) or PARTIAL_UPDATE_ROWS_EVENT (`binlog_row_value_options=PARTIAL_JSON`) events, instead of silently dropping the row changes; remaining MySQL 8 event codes (TRANSACTION_CONTEXT, VIEW_CHANGE, XA_PREPARE, HEARTBEAT_V2) are now named in the code map
+- Lifecycle hardening: emit an explicit error instead of hanging silently when the control connection dies during a metadata fetch; a duplicate `start()` while one is still initialising is ignored, while stop-then-restart during initialisation now works (exactly one binlog dump command is ever enqueued); errors from connections deliberately destroyed by `stop()` are no longer forwarded as teardown noise; errors buffered before an `error` listener attaches are thrown if no listener ever appears, restoring Node's default unhandled `'error'` behaviour
+- DECIMAL parsing no longer mutates the shared network packet buffer when flipping the sign bit
+- Remove dead code left over from the mysql.js protocol layer (ComBinlog, EofPacket/ErrorPacket, BufferReader)
+- Compile event and schema filters into Sets and Maps for O(1) per-event filtering; only own keys of schema filter objects are considered
+- Add a package.json `exports` map with `types` and `default` conditions
+
 ## [0.6.1] - 2026-02-13
 
 - Updated .gitignore and .npmignore to exclude AI tool and build/test files
