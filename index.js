@@ -18,6 +18,7 @@ class ZongJi extends EventEmitter {
     super();
 
     this._pendingErrors = [];
+    this._pendingErrorTimer = null;
     this.on('newListener', (event) => {
       if (event !== 'error' || this._pendingErrors.length === 0) {
         return;
@@ -36,6 +37,7 @@ class ZongJi extends EventEmitter {
     this._warnedUnsupported = new Set();
     this.ready = false;
     this.stopped = false;
+    this._starting = false;
     this.useChecksum = false;
 
     this._dsn = dsn;
@@ -49,7 +51,12 @@ class ZongJi extends EventEmitter {
     const createConnection = (options) => {
       const emitError = (err) => {
         if (this.listenerCount('error') === 0) {
+          // Buffer errors that fire before the caller attaches a listener
+          // (typically within the same tick as construction/start). If no
+          // listener ever appears, fall back to EventEmitter's default
+          // behaviour (throw) rather than swallowing failures silently.
           this._pendingErrors.push(err);
+          this._schedulePendingErrorCheck();
           return;
         }
         this.emit('error', err);
@@ -88,6 +95,23 @@ class ZongJi extends EventEmitter {
     }
 
     this.connection = createConnection(binlogDsn);
+  }
+
+  _schedulePendingErrorCheck() {
+    if (this._pendingErrorTimer) {
+      return;
+    }
+    this._pendingErrorTimer = setImmediate(() => {
+      this._pendingErrorTimer = null;
+      if (this.listenerCount('error') > 0 || this._pendingErrors.length === 0) {
+        return;
+      }
+      const pending = this._pendingErrors.slice();
+      this._pendingErrors.length = 0;
+      // No 'error' listener was attached within a macrotask; re-emit so
+      // Node's unhandled 'error' semantics apply (throws)
+      pending.forEach(err => this.emit('error', err));
+    });
   }
 
   _isChecksumEnabled(next) {
@@ -184,6 +208,14 @@ class ZongJi extends EventEmitter {
         this.ctrlConnection._fatalError ||
         this.ctrlConnection._protocolError ||
         this.ctrlConnection._closing) {
+      // The binlog connection stays paused, so processing has halted.
+      // During stop() that is expected; otherwise it must not be silent.
+      if (!this.stopped) {
+        this.emit('error', new Error(
+          'Control connection unavailable while fetching column metadata ' +
+          'for ' + tableMapEvent.schemaName + '.' + tableMapEvent.tableName +
+          '. Binlog processing has halted; call stop() then start() to resume.'));
+      }
       return;
     }
 
@@ -285,6 +317,13 @@ class ZongJi extends EventEmitter {
       return;
     }
 
+    // A start() is already initialising; a second concurrent call would
+    // enqueue a duplicate binlog dump command on the same connection
+    if (this._starting) {
+      return;
+    }
+    this._starting = true;
+
     this.stopped = false;
 
     if (!this.connection || !this.ctrlConnection) {
@@ -371,6 +410,7 @@ class ZongJi extends EventEmitter {
 
     Promise.all(promises)
       .then(() => {
+        this._starting = false;
         // Check if stop() was called while promises were pending
         if (this.stopped) {
           return;
@@ -409,6 +449,7 @@ class ZongJi extends EventEmitter {
         this.connection.addCommand(new this.BinlogClass(binlogHandler));
       })
       .catch(err => {
+        this._starting = false;
         this.emit('error', err);
       });
 

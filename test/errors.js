@@ -1,4 +1,5 @@
 import tap from 'tap';
+import { execFile } from 'child_process';
 
 import ZongJi from '../index.js';
 import settings from './settings/mysql.js';
@@ -224,4 +225,117 @@ tap.test('Events come through in sequence', test => {
   });
 
   test.end();
+});
+
+tap.test('Calling start() twice does not duplicate the binlog stream', test => {
+  const TEST_TABLE = 'double_start_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const errors = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => errors.push(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    const options = {
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    };
+    // Second synchronous call must be a no-op while the first initialises
+    zongji.start(options);
+    zongji.start(options);
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (7)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.equal(errors.length, 0, 'no errors after double start');
+          test.equal(events.length, 2,
+            'exactly one tablemap + one writerows (no duplicated stream)');
+          test.equal(events[1].rows[0].col, 7);
+          test.end();
+        }, 1500);
+      });
+    });
+  });
+});
+
+tap.test('Dead control connection during metadata fetch emits error', test => {
+  const TEST_TABLE = 'dead_ctrl_conn_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const errors = [];
+  zongji.on('error', err => errors.push(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      const threadId = zongji.ctrlConnection.threadId;
+      testDb.execute([`kill ${threadId}`], killErr => {
+        if (killErr) {
+          return test.fail(killErr);
+        }
+        // Give the control connection a moment to observe the kill, then
+        // trigger a TableMap event that requires a metadata fetch
+        setTimeout(() => {
+          testDb.execute([
+            `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+          ], insertErr => {
+            if (insertErr) {
+              return test.fail(insertErr);
+            }
+            setTimeout(() => {
+              test.ok(
+                errors.some(e => /Binlog processing has halted/.test(e.message)),
+                'received explicit halt error instead of a silent hang');
+              test.end();
+            }, 1500);
+          });
+        }, 500);
+      });
+    });
+  });
+});
+
+tap.test('Errors throw when no error listener is ever attached', test => {
+  const indexUrl = new URL('../index.js', import.meta.url).href;
+  const script = `
+    import(${JSON.stringify(indexUrl)}).then(({ default: ZongJi }) => {
+      const zongji = new ZongJi({ host: '127.0.0.1', port: 1, user: 'x' });
+      zongji.start();
+    });
+  `;
+  execFile(process.execPath, ['-e', script], { timeout: 15000 },
+    (err, stdout, stderr) => {
+      test.ok(err, 'process exited with failure');
+      test.match(stderr, /ECONNREFUSED/,
+        'connection error surfaced as uncaught exception');
+      test.end();
+    });
 });
