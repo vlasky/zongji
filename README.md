@@ -66,7 +66,7 @@ const { default: ZongJi } = await import('@vlasky/zongji');
 
 ## Installation
 
-* Requires Node.js v18+
+* Requires Node.js v18+. Actively supported and tested on Node.js 22, 24 and 26; version 0.7.0 was also verified on Node.js 18 and 20 at release, but those lines are end-of-life and no longer tested.
 
   ```bash
   $ npm install @vlasky/zongji

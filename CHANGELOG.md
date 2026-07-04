@@ -24,6 +24,7 @@ All notable changes to @vlasky/zongji since forking from nevill/zongji.
 - Add a package.json `exports` map with `types` and `default` conditions
 - All emitted events carry an `event.gtid` property (`'uuid:sequence'`) identifying their transaction when the server runs with `gtid_mode=ON`, tracked at the packet layer so it works even when `gtid` events are excluded by `includeEvents`; `undefined` for anonymous transactions
 - Update mysql2 to ^3.22.5; the internal APIs zongji relies on (addCommand, handlePacket, packet sequence validation) were verified unchanged, and a new regression test covers the binlog stream over a compressed connection
+- Continuous integration now tests Node.js 22, 24 and 26 against MySQL 5.7, 8.0 and 8.4. Node.js 18 and 20 are end-of-life: they remain allowed by `engines` (nothing in the code requires anything newer) and 0.7.0 passed the full test suite on both at release time, but they are no longer tested and future releases may break on them
 
 ## [0.6.1] - 2026-02-13
 

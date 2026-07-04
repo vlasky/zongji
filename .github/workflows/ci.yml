@@ -15,11 +15,11 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
 
       - name: Install dependencies
@@ -39,11 +39,11 @@ jobs:
       fail-fast: false
       matrix:
         mysql-version: ['5.7', '8.0', '8.4']
-        node-version: [18, 20, 22]
+        node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -87,14 +87,14 @@ jobs:
         run: docker logs mysql
 
   mysql2-latest:
-    name: Canary (mysql2@latest, MySQL 8.4, Node 22)
+    name: Canary (mysql2@latest, MySQL 8.4, Node 26)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
 
       - name: Install dependencies
