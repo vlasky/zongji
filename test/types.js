@@ -569,3 +569,55 @@ testDb.requireVersion('5.7.8', () => {
     });
   });
 });
+
+// With jsonStrings unset (the mysql2 default), JSON columns decode to
+// JavaScript values rather than JSON strings, and 64-bit integers beyond
+// the safe range are exact strings.
+testDb.requireVersion('5.7.8', () => {
+  tap.test('json object mode (jsonStrings not set)', test => {
+    const TEST_TABLE = 'type_json_object_mode';
+    const connection = { ...settings.connection };
+    delete connection.jsonStrings;
+    const zongji = new ZongJi(connection);
+    test.teardown(() => zongji.stop());
+
+    const events = [];
+    zongji.on('binlog', event => events.push(event));
+    zongji.on('error', error => test.fail(error));
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+        `CREATE TABLE ${TEST_TABLE} (col0 JSON)`,
+        `INSERT INTO ${TEST_TABLE} (col0) VALUES
+          ('{"key1": "value1", "nested": {"a": [1, 2.5, true, null]}, "big": 9223372036854775807}'),
+          ('null'),
+          (NULL)`,
+      ], error => {
+        if (error) {
+          return test.fail(error);
+        }
+        expectEvents(test, events, [
+          { _type: 'TableMap' },
+          { _type: 'WriteRows' },
+        ], 1, () => {
+          const rows = events[1].rows;
+          test.strictSame(rows[0].col0, {
+            key1: 'value1',
+            nested: { a: [1, 2.5, true, null] },
+            big: '9223372036854775807',
+          });
+          // JSON literal null decodes to null; SQL NULL is also null
+          test.strictSame(rows[1].col0, null);
+          test.strictSame(rows[2].col0, null);
+          test.end();
+        });
+      });
+    });
+  });
+});
