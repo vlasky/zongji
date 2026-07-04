@@ -2,7 +2,7 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
-## Unreleased (0.7.0)
+## [0.7.0] - 2026-07-04
 
 ### Breaking changes
 
