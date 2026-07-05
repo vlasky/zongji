@@ -878,6 +878,67 @@ tap.test('event.gtid detaches after the commit marker',
   }));
 });
 
+// ROWS_QUERY_LOG_EVENT: with binlog_rows_query_log_events=ON the server
+// sends the statement text ahead of each statement's row events, to
+// every consumer (no dump flag involved, unlike MariaDB's annotate).
+// The second statement exceeds 255 bytes to prove the event's single
+// length byte (statement length mod 256) is correctly ignored.
+tap.test('rowsquery event carries the statement text',
+  { skip: IS_MARIADB && 'MySQL only; MariaDB uses annotaterows' },
+  test => {
+  const TEST_TABLE = 'rows_query_test';
+  const LONG_COMMENT = 'x'.repeat(300);
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => test.fail(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['rowsquery', 'tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        'SET SESSION binlog_rows_query_log_events = ON',
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (42)`,
+        `INSERT /* ${LONG_COMMENT} */ INTO ${TEST_TABLE} (col) VALUES (43)`,
+        'SET SESSION binlog_rows_query_log_events = OFF',
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        expectEvents(test, events, [
+          { _type: 'RowsQuery' },
+          tableMapEvent(TEST_TABLE),
+          { _type: 'WriteRows' },
+        ], 2, () => {
+          const [rq1, , , rq2] = events;
+          test.match(rq1.statement,
+            new RegExp(`INSERT INTO ${TEST_TABLE}`),
+            'statement text of the row events that follow');
+          test.ok(rq2.statement.length > 255,
+            'statements beyond one length byte arrive whole');
+          test.match(rq2.statement, new RegExp(`${LONG_COMMENT}.*VALUES \\(43\\)`),
+            'long statement text is complete');
+          test.end();
+        });
+      });
+    });
+  });
+});
+
 // XA PREPARE also ends a group's event delivery: the prepared
 // transaction's GTID must not spill onto unrelated events, while the
 // later XA COMMIT arrives under its own GTID.

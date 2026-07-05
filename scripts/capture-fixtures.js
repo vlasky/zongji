@@ -33,7 +33,10 @@ const connectionSettings = {
 };
 
 // The statements whose binlog events form the fixture. Session time_zone is
-// pinned so TIMESTAMP values are reproducible.
+// pinned so TIMESTAMP values are reproducible. On MySQL the last insert
+// runs under binlog_rows_query_log_events=ON so the fixture carries a
+// ROWS_QUERY event (the variable does not exist on MariaDB, whose
+// annotate analogue is captured via requestAnnotateRows below).
 const CAPTURE_TABLE = 'capture_types';
 const captureStatements = [
   'SET @@session.time_zone = "+00:00"',
@@ -95,6 +98,15 @@ const captureStatements = [
   )`,
   `UPDATE ${CAPTURE_TABLE} SET id = 2, vc = 'updated' WHERE id = 1`,
   `DELETE FROM ${CAPTURE_TABLE} WHERE id = 2`,
+];
+
+const mysqlRowsQueryStatements = [
+  'SET SESSION binlog_rows_query_log_events = ON',
+  `INSERT INTO ${CAPTURE_TABLE} (id) VALUES (3)`, // all other columns NULL
+  'SET SESSION binlog_rows_query_log_events = OFF',
+];
+
+const mariadbNullRowStatements = [
   `INSERT INTO ${CAPTURE_TABLE} (id) VALUES (3)`, // all other columns NULL
 ];
 
@@ -233,6 +245,7 @@ async function main() {
     try {
       const statements = [
         ...captureStatements,
+        ...(isMariaDb ? mariadbNullRowStatements : mysqlRowsQueryStatements),
         ...(isMariaDb ? mariadbStatements(mariadbGlobals) : []),
         ...closingStatements,
       ];
@@ -261,7 +274,7 @@ async function main() {
         ...(isMariaDb ? {
           MariadbGtid: 5, AnnotateRows: 3,
           MariadbGtidList: 1, BinlogCheckpoint: 1,
-        } : {}),
+        } : { RowsQuery: 1 }),
       };
       const missing = Object.entries(minimumCounts).filter(([type, min]) =>
         eventSummary.filter(name => name === type).length < min);

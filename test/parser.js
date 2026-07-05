@@ -315,6 +315,12 @@ tap.test('non-row events decode', test => {
   const previous = events.filter(e => e.getTypeName() === 'PreviousGtids');
   previous.forEach(p => test.type(p.gtidSet, 'string'));
 
+  const rowsQueries = events.filter(e => e.getTypeName() === 'RowsQuery');
+  test.equal(rowsQueries.length, 1,
+    'the insert under binlog_rows_query_log_events=ON');
+  test.match(rowsQueries[0].statement, /INSERT INTO capture_types/,
+    'statement text of the row events that follow');
+
   test.end();
 });
 

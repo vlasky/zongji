@@ -420,6 +420,15 @@ export interface AnnotateRowsEvent extends BinlogEvent {
   statement: string;
 }
 
+// MySQL rows query event (code 29) - the SQL statement text for the row
+// events that follow, sent while the server runs with
+// binlog_rows_query_log_events=ON
+export interface RowsQueryEvent extends BinlogEvent {
+  getTypeName(): 'RowsQuery';
+  getEventName(): 'rowsquery';
+  statement: string;
+}
+
 // MariaDB start encryption event (code 164) - informational; the dump
 // thread decrypts server-side and the stream itself is cleartext
 export interface StartEncryptionEvent extends BinlogEvent {
@@ -469,6 +478,7 @@ export type AnyBinlogEvent =
   | MariadbGtidListEvent
   | BinlogCheckpointEvent
   | AnnotateRowsEvent
+  | RowsQueryEvent
   | StartEncryptionEvent
   | XaPrepareEvent
   | UnknownEvent;

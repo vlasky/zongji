@@ -186,6 +186,7 @@ Event name  | Description
 `mariadbgtidlist` | MariaDB GTID list event (start of every binlog file): the last GTID per domain and server seen so far, MariaDB's analogue of `previousgtids`
 `binlogcheckpoint` | MariaDB binlog checkpoint event naming the oldest binlog file still needed for crash recovery (informational)
 `annotaterows` | MariaDB: the SQL `statement` that produced the row events that follow (the analogue of MySQL's rows-query event). Only sent when `start()` was given `requestAnnotateRows: true`; useful for audit trails and statement attribution in CDC records
+`rowsquery` | MySQL: the SQL `statement` that produced the row events that follow (the analogue of MariaDB's `annotaterows`). Sent to every consumer while the server runs with `binlog_rows_query_log_events=ON` (default `OFF`); no `start()` option is involved. The same sensitivity note applies: statement text may contain literals
 `startencryption` | MariaDB encrypted-binlog marker (informational: the server decrypts before sending, the stream itself is cleartext)
 `xaprepare` | XA PREPARE event (MySQL 5.7+ and MariaDB) terminating an XA-prepared event group, with `xidFormatId`, `xidGtrid`, `xidBqual` and `onePhase`
 `heartbeat` | Sent by the server instead of real events: while the connection idles, and in place of transactions skipped server-side during a GTID resume. Carries `binlogName`; `nextPosition` holds the advanced position.
