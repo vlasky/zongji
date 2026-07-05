@@ -610,17 +610,14 @@ class ZongJi extends EventEmitter {
           }
           break;
         }
-        case 'Rotate':
-          // The payload position is the first event of the NEW file: the
-          // only value coherent with binlogName. The header nextPosition
-          // refers to the OLD file (0 for the artificial rotate at dump
-          // start), so rotates are excluded from the generic update below;
-          // persisting (new filename, old-file offset) would corrupt the
-          // resume point until the next non-rotate event repaired it.
-          this.options.filename = event.binlogName;
-          this.options.position = event.position;
-          break;
       }
+      // Rotate events update the (filename, position) resume pair at the
+      // packet layer (lib/sequence/binlog.js), before event filtering, so
+      // the pair stays coherent even when 'rotate' is excluded by
+      // includeEvents. They remain excluded from the generic update below:
+      // the header nextPosition refers to the OLD file (0 for the
+      // artificial rotate at dump start), and persisting (new filename,
+      // old-file offset) would corrupt the resume point.
       // Never advance the resume position past a TableMap: a consumer
       // persisting options.position could otherwise resume in the gap
       // between a TableMap and its row events, and with no cached table

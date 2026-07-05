@@ -1118,3 +1118,92 @@ tap.test('filtered events keep the resume position fresh', test => {
     });
   });
 });
+
+// Regression: rotate events must update the resume pair even when 'rotate'
+// is excluded by includeEvents. Before the packet-layer fix, a filtered
+// rotate updated neither field, then later events advanced options.position
+// into the NEW file while options.filename still named the OLD one - an
+// incoherent pair that resumes from the wrong data.
+tap.test('filtered rotate events keep the resume pair coherent', test => {
+  const TEST_TABLE = 'filtered_rotate_test';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+  zongji.on('error', err => test.fail(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      // Deliberately NO 'rotate'
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      const startFilename = zongji.options.filename;
+      testDb.execute([
+        'FLUSH LOGS',
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (5)`,
+      ], flushErr => {
+        if (flushErr) {
+          return test.fail(flushErr);
+        }
+        setTimeout(() => {
+          test.not(zongji.options.filename, startFilename,
+            'filename follows the rotation despite the rotate filter');
+          const resumePoint = {
+            filename: zongji.options.filename,
+            position: zongji.options.position,
+          };
+          zongji.stop();
+
+          // A row written after the captured pair must be reachable from it
+          testDb.execute([
+            `INSERT INTO ${TEST_TABLE} (col) VALUES (6)`,
+          ], insertErr => {
+            if (insertErr) {
+              return test.fail(insertErr);
+            }
+
+            const resumed = new ZongJi(settings.connection);
+            test.teardown(() => resumed.stop());
+            resumed.on('error', resumeErr => test.fail(resumeErr));
+
+            const resumedRows = [];
+            resumed.on('binlog', evt => {
+              if (evt.getTypeName() === 'WriteRows' &&
+                  evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+                resumedRows.push(evt.rows[0].col);
+              }
+            });
+
+            resumed.start({
+              filename: resumePoint.filename,
+              position: resumePoint.position,
+              serverId: testDb.serverId(),
+              includeEvents: ['tablemap', 'writerows'],
+            });
+
+            resumed.on('ready', () => {
+              setTimeout(() => {
+                test.ok(resumedRows.includes(6),
+                  'row written after the pair is delivered on resume ' +
+                  `(got [${resumedRows}])`);
+                test.notOk(resumedRows.includes(5),
+                  'pair does not point before data already processed');
+                test.end();
+              }, 1000);
+            });
+          });
+        }, 1000);
+      });
+    });
+  });
+});
