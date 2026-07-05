@@ -100,44 +100,70 @@ const captureStatements = [
 // and log_bin_compress event envelopes.
 const MARIADB_TABLE = 'capture_mariadb';
 const MARIADB_HIRES_TABLE = 'capture_hires';
-const mariadbStatements = [
-  `CREATE TABLE ${MARIADB_TABLE} (
-    id INT PRIMARY KEY,
-    u UUID,
-    i4 INET4,
-    i6 INET6,
-    v VECTOR(3),
-    j JSON,
-    vc_comp VARCHAR(300) COMPRESSED,
-    txt_comp TEXT COMPRESSED CHARACTER SET latin1
-  )`,
-  `INSERT INTO ${MARIADB_TABLE} VALUES (
-    1,
-    '11111111-2222-3333-4444-555555555555',
-    '192.168.1.10',
-    '::ffff:8.8.8.8',
-    VEC_FromText('[1.5,2.5,3.5]'),
-    '{"a": 1}',
-    REPEAT('squash-', 30),
-    'caf\xE9 latin one'
-  )`,
-  `INSERT INTO ${MARIADB_TABLE} (id, i6) VALUES (2, '::')`,
-  'SET GLOBAL mysql56_temporal_format = OFF',
-  `CREATE TABLE ${MARIADB_HIRES_TABLE} (
-    dt3 DATETIME(3),
-    t3 TIME(3),
-    ts3 TIMESTAMP(3) NULL
-  )`,
-  'SET GLOBAL mysql56_temporal_format = ON',
-  `INSERT INTO ${MARIADB_HIRES_TABLE} VALUES
-    ('2024-06-15 12:34:56.789', '-01:02:03.500', '2024-06-15 12:34:56.789')`,
-  'SET GLOBAL log_bin_compress = ON',
-  'SET GLOBAL log_bin_compress_min_len = 10',
-  `INSERT INTO ${MARIADB_TABLE} (id, vc_comp)
-    VALUES (3, REPEAT('flat-', 40))`,
-  'SET GLOBAL log_bin_compress = OFF',
-  'SET GLOBAL log_bin_compress_min_len = 256',
-];
+
+// Original values of the GLOBAL variables the capture flips, restored to
+// exactly what the server had (never assumed defaults)
+async function readMariaDbGlobals(conn) {
+  const rows = await query(conn, `SELECT
+    @@global.mysql56_temporal_format AS temporalFormat,
+    @@global.log_bin_compress AS logBinCompress,
+    @@global.log_bin_compress_min_len AS logBinCompressMinLen`);
+  return rows[0];
+}
+
+function mariadbRestoreStatements(globals) {
+  return [
+    `SET GLOBAL mysql56_temporal_format = ${
+      globals.temporalFormat ? 'ON' : 'OFF'}`,
+    `SET GLOBAL log_bin_compress = ${
+      globals.logBinCompress ? 'ON' : 'OFF'}`,
+    `SET GLOBAL log_bin_compress_min_len = ${
+      globals.logBinCompressMinLen}`,
+  ];
+}
+
+function mariadbStatements(globals) {
+  return [
+    `CREATE TABLE ${MARIADB_TABLE} (
+      id INT PRIMARY KEY,
+      u UUID,
+      i4 INET4,
+      i6 INET6,
+      v VECTOR(3),
+      j JSON,
+      vc_comp VARCHAR(300) COMPRESSED,
+      txt_comp TEXT COMPRESSED CHARACTER SET latin1
+    )`,
+    `INSERT INTO ${MARIADB_TABLE} VALUES (
+      1,
+      '11111111-2222-3333-4444-555555555555',
+      '192.168.1.10',
+      '::ffff:8.8.8.8',
+      VEC_FromText('[1.5,2.5,3.5]'),
+      '{"a": 1}',
+      REPEAT('squash-', 30),
+      'caf\xE9 latin one'
+    )`,
+    `INSERT INTO ${MARIADB_TABLE} (id, i6) VALUES (2, '::')`,
+    'SET GLOBAL mysql56_temporal_format = OFF',
+    `CREATE TABLE ${MARIADB_HIRES_TABLE} (
+      dt3 DATETIME(3),
+      t3 TIME(3),
+      ts3 TIMESTAMP(3) NULL
+    )`,
+    // The format is baked into the table at CREATE; the global can be
+    // restored immediately
+    `SET GLOBAL mysql56_temporal_format = ${
+      globals.temporalFormat ? 'ON' : 'OFF'}`,
+    `INSERT INTO ${MARIADB_HIRES_TABLE} VALUES
+      ('2024-06-15 12:34:56.789', '-01:02:03.500', '2024-06-15 12:34:56.789')`,
+    'SET GLOBAL log_bin_compress = ON',
+    'SET GLOBAL log_bin_compress_min_len = 10',
+    `INSERT INTO ${MARIADB_TABLE} (id, vc_comp)
+      VALUES (3, REPEAT('flat-', 40))`,
+    ...mariadbRestoreStatements(globals),
+  ];
+}
 
 const closingStatements = [
   'FLUSH LOGS', // real Rotate event
@@ -198,10 +224,12 @@ async function main() {
 
     const work = mysql.createConnection(
       { ...connectionSettings, database: FIXTURE_DB });
+    const mariadbGlobals = isMariaDb ?
+      await readMariaDbGlobals(admin) : null;
     try {
       const statements = [
         ...captureStatements,
-        ...(isMariaDb ? mariadbStatements : []),
+        ...(isMariaDb ? mariadbStatements(mariadbGlobals) : []),
         ...closingStatements,
       ];
       for (const sql of statements) {
@@ -209,6 +237,14 @@ async function main() {
       }
     } finally {
       work.destroy();
+      // A failure mid-sequence must not leave the flipped globals behind
+      // (the restore statements are idempotent, so re-running them after
+      // a complete sequence is harmless)
+      if (isMariaDb) {
+        for (const sql of mariadbRestoreStatements(mariadbGlobals)) {
+          await query(admin, sql).catch(() => {});
+        }
+      }
     }
 
     // Give the binlog stream a moment to drain
