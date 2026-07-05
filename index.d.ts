@@ -544,6 +544,14 @@ declare class ZongJi extends EventEmitter {
    * start).
    */
   readonly gtidSet: string | undefined;
+  /**
+   * The GTID of the transaction whose events are currently being
+   * delivered (equal to their event.gtid); undefined between
+   * transactions and for anonymous transactions. Only coherent when
+   * read synchronously inside a 'binlog' handler: checkpointing code
+   * should use event.gtid.
+   */
+  readonly lastGtid: string | undefined;
   /** Current filter settings */
   filters: {
     includeEvents?: string[];

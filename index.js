@@ -211,11 +211,22 @@ class ZongJi extends EventEmitter {
     return this._executedGtids ? this._executedGtids.toString() : undefined;
   }
 
+  // The GTID of the transaction whose events are currently being
+  // delivered (what event.gtid is for them); undefined between
+  // transactions. Only coherent when read synchronously inside a
+  // 'binlog' handler: checkpointing code should use event.gtid.
+  get lastGtid() {
+    return this._currentGtid;
+  }
+
   // Called from the packet layer (before event filtering) for
   // GTID-relevant events. A transaction's GTID enters the executed set
   // only once its commit marker has been seen (Xid, or a Query event
   // other than BEGIN, e.g. DDL or COMMIT), so a persisted zongji.gtidSet
   // never claims a transaction whose row events were still in flight.
+  // Returns true when the event definitively closes the current
+  // transaction, so the caller can stop attaching its GTID to
+  // subsequent events.
   _trackGtidProgress(eventName, event) {
     const fold = () => {
       if (this._pendingGtid !== undefined && this._executedGtids) {
@@ -236,7 +247,7 @@ class ZongJi extends EventEmitter {
         break;
       case 'xid':
         fold();
-        break;
+        return true;
       case 'query': {
         // Fold only on definite commit markers. Anything else (BEGIN,
         // XA START/END, DDL, SAVEPOINT, ...) must not fold: claiming a
@@ -248,6 +259,7 @@ class ZongJi extends EventEmitter {
             query.startsWith('XA COMMIT') ||
             query.startsWith('XA ROLLBACK')) {
           fold();
+          return true;
         }
         break;
       }
@@ -283,6 +295,7 @@ class ZongJi extends EventEmitter {
         }
         break;
     }
+    return false;
   }
 
   _findBinlogEnd(next) {

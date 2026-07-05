@@ -804,6 +804,80 @@ tap.test('event.gtid attached to row events',
   }));
 });
 
+// event.gtid detaches at commit markers: an event that belongs to no
+// transaction (here a rotate between two transactions) must not carry
+// the previous transaction's GTID, while the commit event itself keeps
+// it. zongji.lastGtid mirrors the tracked value during delivery.
+tap.test('event.gtid detaches after the commit marker',
+  { skip: IS_MARIADB && 'MySQL gtid_mode only' },
+  test => {
+  const TEST_TABLE = 'gtid_detach_test';
+  const GTID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d+$/;
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const lastGtids = [];
+  zongji.on('binlog', evt => {
+    events.push(evt);
+    lastGtids.push(zongji.lastGtid);
+  });
+  zongji.on('error', err => test.fail(err));
+
+  testDb.ensureGtidMode(() => testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      // 'gtid' deliberately NOT included: detachment must act on the
+      // internally tracked value, not on delivered gtid events
+      includeEvents: ['tablemap', 'writerows', 'xid', 'rotate'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+        'FLUSH LOGS', // a real rotate directly after the commit
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        expectEvents(test, events, [
+          { _type: 'Rotate' }, // artificial, at dump start
+          tableMapEvent(TEST_TABLE),
+          { _type: 'WriteRows' },
+          { _type: 'Xid' },
+          { _type: 'Rotate' }, // real, written by FLUSH LOGS
+          { _type: 'Rotate' }, // artificial, opening the new file
+        ], 1, () => {
+          const [rotate0, tm, wr, xid, rotate1, rotate2] = events;
+          test.equal(rotate0.gtid, undefined,
+            'nothing to carry before the first transaction');
+          test.match(xid.gtid, GTID_REGEX,
+            'the commit event keeps its transaction GTID');
+          test.equal(tm.gtid, xid.gtid);
+          test.equal(wr.gtid, xid.gtid);
+          test.equal(rotate1.gtid, undefined,
+            'the post-commit rotate belongs to no transaction');
+          test.equal(rotate2.gtid, undefined);
+          test.strictSame(lastGtids,
+            [undefined, tm.gtid, wr.gtid, xid.gtid, undefined, undefined],
+            'lastGtid mirrors event.gtid throughout');
+          test.equal(zongji.lastGtid, undefined,
+            'idle between transactions');
+          test.end();
+        });
+      });
+    });
+  }));
+});
+
 // Regression: filters passed to a start() issued while a previous start()
 // is still initialising must be applied, not silently dropped. Consumers
 // (e.g. mysql-live-select) register tables between start() and 'ready'
