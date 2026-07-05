@@ -360,6 +360,10 @@ export interface MariadbGtidEvent extends BinlogEvent {
   xidBqual?: Buffer;
   /** Raw flags_extra byte, when present */
   flagsExtra?: number;
+  /** Number of extra engines, when FL_EXTRA_MULTI_ENGINE is set */
+  extraEngines?: number;
+  /** Start-alter sequence number, for COMMIT/ROLLBACK ALTER groups */
+  saSeqNo?: number | string;
   /** Thread id of the originating connection (MariaDB 11.5+) */
   threadId?: number;
   /** Full GTID string (domain-server-sequence) */

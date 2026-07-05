@@ -9,6 +9,7 @@ import ZongJi from '../index.js';
 import initBinlogPacketClass from '../lib/packet/binlog.js';
 import initBinlogClass from '../lib/sequence/binlog.js';
 import { Parser } from '../lib/reader.js';
+import * as eventsModule from '../lib/binlog_event.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(
   new URL('./fixtures/binlog-mysql84.json', import.meta.url), 'utf8'));
@@ -377,3 +378,49 @@ tap.test('truncated packet surfaces a parse error via getEvent', test => {
     'corrupt packet throws instead of returning garbage');
   test.end();
 });
+
+// MariaDB event parsers must bound every fixed or length-prefixed read by
+// the checksum-excluded end: the parser's own bounds include the trailing
+// CRC32, so a truncated body could otherwise silently absorb checksum
+// bytes as field data.
+tap.test('truncated MariaDB events throw instead of consuming the CRC',
+  test => {
+    const { MariadbGtid, MariadbGtidList, BinlogCheckpoint } = eventsModule;
+    const zongji = { useChecksum: true };
+    const makeParser = (body) => {
+      const parser = new Parser();
+      parser.append(Buffer.concat([body, Buffer.from([0xde, 0xad, 0xbe, 0xef])]));
+      return parser;
+    };
+    const options = { timestamp: 0, nextPosition: 100, size: 0, serverId: 1 };
+
+    // FL_PREPARED_XA claims 6+ more bytes; only 2 remain before the CRC
+    test.throws(() => new MariadbGtid(makeParser(Buffer.concat([
+      Buffer.alloc(8, 0x01),          // seq_no
+      Buffer.from([0, 0, 0, 0]),      // domain_id
+      Buffer.from([0x40]),            // flags2 = FL_PREPARED_XA
+      Buffer.from([0x11, 0x22]),
+    ])), options, zongji), /Truncated MariadbGtid/);
+
+    // Count claims one 16-byte entry; only 12 bytes remain before the CRC
+    test.throws(() => new MariadbGtidList(makeParser(Buffer.concat([
+      Buffer.from([0x01, 0, 0, 0]),   // count = 1
+      Buffer.alloc(12, 0x02),
+    ])), options, zongji), /Truncated MariadbGtidList/);
+
+    // Name length runs past the data area into the CRC
+    test.throws(() => new BinlogCheckpoint(makeParser(Buffer.concat([
+      Buffer.from([0x10, 0, 0, 0]),   // length 16
+      Buffer.from('mysql-bin.01'),    // only 12 bytes
+    ])), options, zongji), /Truncated BinlogCheckpoint/);
+
+    // A well-formed minimal GTID event still parses (13 bytes + pad)
+    const good = new MariadbGtid(makeParser(Buffer.concat([
+      Buffer.alloc(8, 0x00), Buffer.from([5, 0, 0, 0]), Buffer.from([0x01]),
+      Buffer.alloc(6, 0x00),          // zero padding to 19
+    ])), options, zongji);
+    test.equal(good.domainId, 5);
+    test.equal(good.standalone, true);
+    test.equal(good.gtid, '5-1-0');
+    test.end();
+  });
