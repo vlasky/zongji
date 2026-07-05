@@ -1018,8 +1018,16 @@ tap.test('rotate events keep filename and position coherent', test => {
             filename: zongji.options.filename,
             position: zongji.options.position,
           };
-          test.equal(resumePoint.position, 4,
-            'resume pair points at the start of the new file');
+          // The rotate itself sets position 4; the new file's filtered
+          // header events (format description, Previous_gtids) may then
+          // advance it within the header region, which is equally
+          // coherent. What must never appear is 0 (artificial-rotate bug)
+          // or an old-file offset beyond the new file's header (the
+          // corrupt pair this test regression-guards); the resume below
+          // proves the pair is actually usable.
+          test.ok(resumePoint.position >= 4 && resumePoint.position < 1000,
+            'resume pair points into the start of the new file ' +
+            `(position ${resumePoint.position})`);
 
           // Events written after the rotation must be reachable from the
           // persisted pair
@@ -1058,6 +1066,53 @@ tap.test('rotate events keep filename and position coherent', test => {
               }, 1000);
             });
           });
+        }, 1000);
+      });
+    });
+  });
+});
+
+// Regression: events filtered out by includeEvents must still advance the
+// resume position (packet layer). With only 'tablemap' included, no
+// delivered event carries a usable position (TableMap is deliberately held
+// back), so freshness must come from the filtered events. On MariaDB this
+// is acute for any filter set excluding 'query'/'xid': events inside a
+// transaction carry end_log_pos=0, so only the filtered commit knows the
+// real position.
+tap.test('filtered events keep the resume position fresh', test => {
+  const TEST_TABLE = 'filtered_position_test';
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+  zongji.on('error', err => test.fail(err));
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap'],
+    });
+
+    zongji.on('ready', () => {
+      const startPosition = zongji.options.position;
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.ok(zongji.options.position > startPosition,
+            'position advanced past the start point ' +
+            `(${zongji.options.position} > ${startPosition})`);
+          test.end();
         }, 1000);
       });
     });

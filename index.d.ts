@@ -390,6 +390,14 @@ declare class ZongJi extends EventEmitter {
   stopped: boolean;
   /** Whether binlog checksum is enabled */
   useChecksum: boolean;
+  /**
+   * Server version string as reported by SELECT VERSION(), e.g.
+   * '8.4.5' or '11.8.8-MariaDB-ubu2404-log'. Set during start()
+   * initialisation, before the 'ready' event.
+   */
+  serverVersion: string | undefined;
+  /** True when the connected server is MariaDB (set during start()) */
+  isMariaDb: boolean;
   /** Current binlog options */
   options: {
     serverId?: number;
