@@ -213,6 +213,82 @@ testDb.requireMariaDb(() => {
     });
   });
 
+  tap.test('FULL row metadata pairs charsets across COMPRESSED columns', test => {
+    const TEST_TABLE = 'mariadb_full_comp_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    test.teardown(() => new Promise(resolve => testDb.execute(
+      ['SET GLOBAL binlog_row_metadata = NO_LOG'], () => resolve())));
+    zongji.on('error', err => test.fail(err));
+
+    const rows = [];
+    let sawSelfDescribing = false;
+    zongji.on('binlog', evt => {
+      const type = evt.getTypeName();
+      if (type === 'TableMap' && evt.tableName === TEST_TABLE &&
+          evt.hasSelfDescribingMetadata()) {
+        sawSelfDescribing = true;
+      }
+      if (type === 'WriteRows' &&
+          evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+        rows.push(...evt.rows);
+      }
+    });
+
+    testDb.execute([
+      'SET GLOBAL binlog_row_metadata = FULL',
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      // The COMPRESSED latin1 columns must participate in the charset
+      // list indexing, or the trailing utf8mb4 column's charset would be
+      // paired onto the wrong column
+      `CREATE TABLE ${TEST_TABLE} (
+        vc VARCHAR(100) COMPRESSED CHARACTER SET latin1,
+        txt TEXT COMPRESSED CHARACTER SET latin1,
+        vb VARBINARY(100) COMPRESSED,
+        name VARCHAR(20)
+      )`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} VALUES
+            ('caf\xE9', REPEAT('caf\xE9-', 40), REPEAT('b', 60), 'plain')`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          testDb.execute([
+            `SELECT * FROM ${TEST_TABLE}`,
+          ], (selectErr, results) => {
+            if (selectErr) {
+              return test.fail(selectErr);
+            }
+            const expected = results[results.length - 1];
+            setTimeout(() => {
+              test.ok(sawSelfDescribing,
+                'TableMap carried FULL self-describing metadata');
+              test.equal(rows.length, 1);
+              test.strictSame(rows[0], { ...expected[0] },
+                'row decoded from binlog metadata alone matches the ' +
+                'mysql2 query result');
+              test.end();
+            }, 1000);
+          });
+        });
+      });
+    });
+  });
+
   tap.test('resume from a persisted GTID position delivers only new transactions', test => {
     const TEST_TABLE = 'mariadb_resume_test';
 
