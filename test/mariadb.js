@@ -382,6 +382,81 @@ testDb.requireMariaDb(() => {
     });
   });
 
+  tap.test('MariaDB 5.3 hires temporals decode', test => {
+    const TEST_TABLE = 'mariadb_hires_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    zongji.on('error', err => test.fail(err));
+
+    const rows = [];
+    zongji.on('binlog', evt => {
+      if (evt.getTypeName() === 'WriteRows' &&
+          evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+        rows.push(...evt.rows);
+      }
+    });
+
+    testDb.execute([
+      // GLOBAL-only; the storage format is baked into the table at
+      // CREATE time, so it can be restored immediately afterwards
+      'SET GLOBAL mysql56_temporal_format = OFF',
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (
+        ts0 TIMESTAMP NULL, ts3 TIMESTAMP(3) NULL, ts6 TIMESTAMP(6) NULL,
+        dt0 DATETIME, dt1 DATETIME(1), dt3 DATETIME(3), dt6 DATETIME(6),
+        t0 TIME, t2 TIME(2), t3 TIME(3), t6 TIME(6), tneg TIME(3)
+      )`,
+      'SET GLOBAL mysql56_temporal_format = ON',
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} VALUES (
+            '2023-01-02 03:04:05', '2023-01-02 03:04:05.678',
+            '2023-01-02 03:04:05.678000',
+            '2023-01-02 03:04:05', '2023-01-02 03:04:05.6',
+            '2023-01-02 03:04:05.678', '2023-01-02 03:04:05.678000',
+            '03:04:05', '03:04:05.67', '03:04:05.678', '03:04:05.678901',
+            '-838:59:58.999')`,
+          `INSERT INTO ${TEST_TABLE} VALUES
+            (NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+             NULL, NULL, NULL, NULL, NULL)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          testDb.execute([
+            `SELECT * FROM ${TEST_TABLE}`,
+          ], (selectErr, results) => {
+            if (selectErr) {
+              return test.fail(selectErr);
+            }
+            const expected = results[results.length - 1];
+            setTimeout(() => {
+              test.equal(rows.length, expected.length,
+                'both rows decoded');
+              for (let i = 0; i < expected.length; i++) {
+                test.strictSame(rows[i], { ...expected[i] },
+                  `row ${i + 1} matches the mysql2 query result`);
+              }
+              test.end();
+            }, 1000);
+          });
+        });
+      });
+    });
+  });
+
   tap.test('resume from a persisted GTID position delivers only new transactions', test => {
     const TEST_TABLE = 'mariadb_resume_test';
 
