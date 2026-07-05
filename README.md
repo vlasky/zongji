@@ -175,7 +175,7 @@ Event name  | Description
 `unknown`   | Catch any other events
 `query`     | [Insert/Update/Delete Query](https://dev.mysql.com/doc/internals/en/query-event.html)
 `intvar`    | [Autoincrement and LAST_INSERT_ID](https://dev.mysql.com/doc/internals/en/intvar-event.html)
-`rotate`    | [New Binlog file](https://dev.mysql.com/doc/internals/en/rotate-event.html) Not required to be included to rotate to new files, but it is required to be included in order to keep the `filename` and `position` properties updated with current values for [graceful restarting on errors](https://gist.github.com/numtel/5b37b2a7f47b380c1a099596c6f3db2f).
+`rotate`    | [New Binlog file](https://dev.mysql.com/doc/internals/en/rotate-event.html). The `filename` and `position` resume properties stay updated across rotations whether or not this event is included; include it only if you want to observe rotations yourself.
 `format`    | [Format Description](https://dev.mysql.com/doc/internals/en/format-description-event.html)
 `xid`       | [Transaction ID](https://dev.mysql.com/doc/internals/en/xid-event.html)
 `gtid`      | MySQL GTID event with `gtid`, `sid`, `gno` properties
