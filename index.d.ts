@@ -417,6 +417,11 @@ export interface BinlogCheckpointEvent extends BinlogEvent {
 export interface AnnotateRowsEvent extends BinlogEvent {
   getTypeName(): 'AnnotateRows';
   getEventName(): 'annotaterows';
+  /**
+   * The event carries the statement's original bytes with no charset
+   * metadata; decoded as utf8 (exact for utf8/utf8mb4 clients, the
+   * overwhelmingly common case).
+   */
   statement: string;
 }
 
@@ -426,6 +431,11 @@ export interface AnnotateRowsEvent extends BinlogEvent {
 export interface RowsQueryEvent extends BinlogEvent {
   getTypeName(): 'RowsQuery';
   getEventName(): 'rowsquery';
+  /**
+   * The event carries the statement's original bytes with no charset
+   * metadata; decoded as utf8 (exact for utf8/utf8mb4 clients, the
+   * overwhelmingly common case).
+   */
   statement: string;
 }
 
