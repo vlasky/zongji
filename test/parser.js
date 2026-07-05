@@ -106,6 +106,9 @@ function assertCanonicalRows(test, events, { exactEnumValues } = {}) {
   }, 'JSON as parsed object, 64-bit integer exact');
   test.strictSame(row.geo, { x: 1, y: 2 });
   test.equal(row.txt_latin1, 'café ñ', 'latin1 TEXT decoded via its charset');
+  test.equal(row.vc_latin1, 'Ÿ€ señor',
+    'latin1 VARCHAR decoded as cp1252 (Ÿ and € live in 0x80-0x9F)');
+  test.equal(row.vc_ucs2, 'héllo', 'ucs2 VARCHAR decoded big-endian');
 
   const change = updates[0].rows[0];
   test.equal(change.before.id, 1);
@@ -186,6 +189,11 @@ tap.test('binlog_row_metadata=FULL: synthesised column schemas', test => {
   test.equal(byName.txt.CHARACTER_SET_NAME, 'utf8mb4');
   test.equal(byName.txt_latin1.CHARACTER_SET_NAME, 'latin1',
     'per-column charset from binlog metadata');
+  test.equal(byName.vc_latin1.COLUMN_TYPE, 'varchar(20)');
+  test.equal(byName.vc_latin1.CHARACTER_SET_NAME, 'latin1');
+  test.equal(byName.vc_ucs2.COLUMN_TYPE, 'varchar(10)',
+    'character width recovered through the two-byte-per-char charset');
+  test.equal(byName.vc_ucs2.CHARACTER_SET_NAME, 'ucs2');
   test.equal(byName.blb.COLUMN_TYPE, 'blob');
   test.equal(byName.blb.CHARACTER_SET_NAME, null);
   test.strictSame(byName.e.ENUM_VALUES, ['a', 'b', 'c']);

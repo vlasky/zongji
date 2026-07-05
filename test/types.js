@@ -365,6 +365,21 @@ defineTypeTest('text', [
   [null, null, null, null]
 ]);
 
+// Non-utf8 charsets must decode via the column's own charset; ucs2, utf16
+// and utf32 are stored big-endian (the row is compared against a mysql2
+// SELECT, whose results the server has converted to the connection charset)
+defineTypeTest('string_charsets', [
+  'VARCHAR(20) CHARACTER SET latin1 NULL',
+  'CHAR(10) CHARACTER SET latin1 NULL',
+  'TEXT CHARACTER SET latin1 NULL',
+  'VARCHAR(10) CHARACTER SET ucs2 NULL',
+  'VARCHAR(10) CHARACTER SET utf16 NULL',
+  'VARCHAR(10) CHARACTER SET utf32 NULL'
+], [
+  ["'café ñ'", "'às-tu'", "'Ÿ é ü'", "'héllo'", "'wörld'", "'ütf32'"],
+  [null, null, null, null, null, null]
+]);
+
 // ======= below require different version of MySQL =======
 
 testDb.requireVersion('5.5.3', () => {

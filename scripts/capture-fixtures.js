@@ -61,7 +61,9 @@ const captureStatements = [
     bt BIT(10),
     js JSON,
     geo GEOMETRY,
-    txt_latin1 TEXT CHARACTER SET latin1
+    txt_latin1 TEXT CHARACTER SET latin1,
+    vc_latin1 VARCHAR(20) CHARACTER SET latin1,
+    vc_ucs2 VARCHAR(10) CHARACTER SET ucs2
   )`,
   `INSERT INTO ${CAPTURE_TABLE} VALUES (
     1,
@@ -87,7 +89,9 @@ const captureStatements = [
     b'1000000001',
     '{"a": 1, "big": 9223372036854775807, "arr": ["x", true, null], "d": 1.5}',
     ST_GeomFromText('POINT(1 2)'),
-    'café ñ'
+    'café ñ',
+    'Ÿ€ señor',
+    'héllo'
   )`,
   `UPDATE ${CAPTURE_TABLE} SET id = 2, vc = 'updated' WHERE id = 1`,
   `DELETE FROM ${CAPTURE_TABLE} WHERE id = 2`,
