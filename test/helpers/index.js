@@ -114,9 +114,9 @@ export function requireVersion(expected, done) {
   });
 }
 
-// Calls done() only when the test server is MariaDB; used to register
-// MariaDB-specific test suites conditionally (mirrors requireVersion)
-export function requireMariaDb(done) {
+// Calls done(isMariaDb) so suites can be registered conditionally per
+// server flavour (mirrors requireVersion)
+function checkFlavour(done) {
   const connObj = {...settings.connection};
   // database doesn't exist at this time
   delete connObj.database;
@@ -128,7 +128,23 @@ export function requireMariaDb(done) {
       throw err;
     }
 
-    if (results[results.length - 1][0].version.includes('MariaDB')) {
+    done(results[results.length - 1][0].version.includes('MariaDB'));
+  });
+}
+
+// Calls done() only when the test server is MariaDB
+export function requireMariaDb(done) {
+  checkFlavour(isMariaDb => {
+    if (isMariaDb) {
+      done();
+    }
+  });
+}
+
+// Calls done() only when the test server is MySQL
+export function requireMySql(done) {
+  checkFlavour(isMariaDb => {
+    if (!isMariaDb) {
       done();
     }
   });

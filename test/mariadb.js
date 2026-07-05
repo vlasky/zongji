@@ -129,6 +129,90 @@ testDb.requireMariaDb(() => {
     });
   });
 
+  tap.test('MariaDB data types decode to match query results', test => {
+    const TEST_TABLE = 'mariadb_types_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    zongji.on('error', err => test.fail(err));
+
+    const rows = [];
+    zongji.on('binlog', evt => {
+      if (evt.getTypeName() === 'WriteRows' &&
+          evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+        rows.push(...evt.rows);
+      }
+    });
+
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        u UUID,
+        i4 INET4,
+        i6 INET6,
+        v VECTOR(3),
+        j JSON,
+        vc VARCHAR(500) COMPRESSED,
+        vb VARBINARY(500) COMPRESSED,
+        txt TEXT COMPRESSED,
+        txt_latin1 TEXT COMPRESSED CHARACTER SET latin1,
+        b BLOB COMPRESSED
+      )`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          // Long repeated values compress (zlib envelope); short ones are
+          // stored uncompressed inside the envelope (method 0)
+          `INSERT INTO ${TEST_TABLE}
+            (u, i4, i6, v, j, vc, vb, txt, txt_latin1, b) VALUES
+            ('11111111-2222-3333-4444-555555555555', '192.168.1.10',
+             '2001:db8::1', VEC_FromText('[1.5,2.5,3.5]'),
+             '{"a": 1, "b": [true, null]}',
+             REPEAT('compressme-', 30), REPEAT('bin', 40),
+             REPEAT('texty-', 50), 'caf\xE9 latin one', 'short'),
+            (UUID(), '10.0.0.1', '::ffff:8.8.8.8', VEC_FromText('[0,0,1]'),
+             '[1,2,3]', 'tiny', X'00FF00', 'small', 'sm\xE5ll', REPEAT('z', 900))`,
+          `INSERT INTO ${TEST_TABLE} (i6) VALUES
+            ('::8.8.8.8'), ('::1'), ('::'), ('1:0:0:2:0:0:0:3'),
+            ('fe80::1:2:3:4')`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          // The server's own text forms are the reference
+          testDb.execute([
+            `SELECT * FROM ${TEST_TABLE} ORDER BY id`,
+          ], (selectErr, results) => {
+            if (selectErr) {
+              return test.fail(selectErr);
+            }
+            const expected = results[results.length - 1];
+            setTimeout(() => {
+              test.equal(rows.length, expected.length,
+                'every inserted row decoded');
+              for (let i = 0; i < expected.length; i++) {
+                test.strictSame(rows[i], { ...expected[i] },
+                  `row ${i + 1} matches the mysql2 query result`);
+              }
+              test.end();
+            }, 1000);
+          });
+        });
+      });
+    });
+  });
+
   tap.test('resume from a persisted GTID position delivers only new transactions', test => {
     const TEST_TABLE = 'mariadb_resume_test';
 
