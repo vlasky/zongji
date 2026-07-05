@@ -1,7 +1,7 @@
 {
   "name": "@vlasky/zongji",
   "version": "0.7.1",
-  "description": "MySQL binlog-based change data capture (CDC) for Node.js",
+  "description": "MySQL and MariaDB binlog-based change data capture (CDC) for Node.js",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
@@ -24,7 +24,10 @@
   },
   "keywords": [
     "mysql",
-    "binlog"
+    "mariadb",
+    "binlog",
+    "cdc",
+    "replication"
   ],
   "author": "Vlad Lasky <github@vladlasky.com> (https://github.com/vlasky)",
   "contributors": [
