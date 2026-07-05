@@ -359,6 +359,7 @@ class ZongJi extends EventEmitter {
     startAtEnd,
     gtidSet,
     nonBlock,
+    requestAnnotateRows,
   } = {}) {
     this.options = {
       serverId,
@@ -367,6 +368,7 @@ class ZongJi extends EventEmitter {
       startAtEnd,
       gtidSet,
       nonBlock,
+      requestAnnotateRows,
     };
   }
 

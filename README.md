@@ -158,6 +158,7 @@ Option Name | Type | Description
 `filename` | `string` | Begin reading events from this binlog file. If specified together with `position`, will take precedence over `startAtEnd`.
 `position` | `integer` | Begin reading events from this position. Must be included with `filename`.
 `gtidSet` | `string` | Resume from executed GTIDs (e.g. a persisted `zongji.gtidSet`): a MySQL GTID set (`'uuid:1-27'`) or a MariaDB GTID position (`'0-1-1234'`), matching the server flavour. The server locates the correct binlog file itself and skips transactions already processed, so a checkpoint remains valid across failover to another server in the same replication topology. Requires `gtid_mode=ON` on MySQL; always available on MariaDB. Pass `''` to stream the entire available history. Takes precedence over `filename`/`position` and `startAtEnd`.
+`requestAnnotateRows` | `boolean` | MariaDB only: ask the server to send `annotaterows` events (the SQL statement text preceding each row operation's events). Off by default; note the statement text may contain sensitive literals that the row images alone would not expose. Ignored on MySQL.<br>**Default:** `false`
 `includeEvents` | `[string]` | Array of event names to include<br>**Example:** `['writerows', 'updaterows', 'deleterows']`
 `excludeEvents` | `[string]` | Array of event names to exclude<br>**Example:** `['rotate', 'tablemap']`
 `includeSchema` | `object` | Object describing which databases and tables to include (Only for row events). Use database names as the key and pass an array of table names or `true` (for the entire database).<br>**Example:** ```{ 'my_database': ['allow_table', 'another_table'], 'another_db': true }```
@@ -184,6 +185,7 @@ Event name  | Description
 `mariadbgtid` | MariaDB GTID event with `gtid` (`'domain-server-sequence'`), `domainId`, `serverId`, `seqNo` and flags (`standalone`, `isDdl`, XA states). Replaces the `BEGIN` query event of a transaction.
 `mariadbgtidlist` | MariaDB GTID list event (start of every binlog file): the last GTID per domain and server seen so far, MariaDB's analogue of `previousgtids`
 `binlogcheckpoint` | MariaDB binlog checkpoint event naming the oldest binlog file still needed for crash recovery (informational)
+`annotaterows` | MariaDB: the SQL `statement` that produced the row events that follow (the analogue of MySQL's rows-query event). Only sent when `start()` was given `requestAnnotateRows: true`; useful for audit trails and statement attribution in CDC records
 `startencryption` | MariaDB encrypted-binlog marker (informational: the server decrypts before sending, the stream itself is cleartext)
 `xaprepare` | XA PREPARE event (MySQL 5.7+ and MariaDB) terminating an XA-prepared event group, with `xidFormatId`, `xidGtrid`, `xidBqual` and `onePhase`
 `heartbeat` | Sent by the server instead of real events: while the connection idles, and in place of transactions skipped server-side during a GTID resume. Carries `binlogName`; `nextPosition` holds the advanced position.

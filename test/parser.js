@@ -424,3 +424,73 @@ tap.test('truncated MariaDB events throw instead of consuming the CRC',
     test.equal(good.gtid, '5-1-0');
     test.end();
   });
+
+// MariaDB 11.8 capture: native GTID events, annotate events, logical
+// types riding on binary codes, COMPRESSED columns, a compressed row
+// EVENT (log_bin_compress) and 5.3 hires temporals - all decoded offline
+// from the pinned bytes, on any test lane.
+const FIXTURE_MARIADB = JSON.parse(fs.readFileSync(
+  new URL('./fixtures/binlog-mariadb118.json', import.meta.url), 'utf8'));
+
+tap.test('MariaDB fixture decodes offline', test => {
+  const events = decodeFixture(FIXTURE_MARIADB);
+  test.strictSame(
+    events.map(e => e.getTypeName()),
+    FIXTURE_MARIADB.eventSummary,
+    'decoded event types match the sequence observed at capture time');
+
+  const gtids = events.filter(e => e.getTypeName() === 'MariadbGtid');
+  test.ok(gtids.length >= 5, 'native GTID events present');
+  for (const gtid of gtids) {
+    test.match(gtid.gtid, /^\d+-\d+-\d+$/);
+  }
+  test.equal(gtids[0].standalone, true, 'DDL group GTID is standalone');
+  test.equal(gtids[0].isDdl, true);
+  test.equal(gtids[1].standalone, false, 'transaction GTID replaces BEGIN');
+  for (let i = 1; i < gtids.length; i++) {
+    test.ok(BigInt(String(gtids[i].seqNo)) >
+      BigInt(String(gtids[i - 1].seqNo)), `seqNo advances (${i})`);
+  }
+
+  const list = events.find(e => e.getTypeName() === 'MariadbGtidList');
+  test.ok(list.count >= 1, 'GTID list at the rotated file start');
+  test.equal(list.count, list.gtids.length);
+  test.match(list.gtids[list.gtids.length - 1].gtid, /^\d+-\d+-\d+$/);
+
+  const checkpoint =
+    events.find(e => e.getTypeName() === 'BinlogCheckpoint');
+  test.match(checkpoint.binlogName, /^mysql-bin\.\d+$/);
+
+  const notes = events.filter(e => e.getTypeName() === 'AnnotateRows');
+  test.ok(notes.some(n => n.statement.includes(
+    'INSERT INTO capture_mariadb')),
+    'annotate events carry the originating SQL');
+
+  const writes = events.filter(e => e.getTypeName() === 'WriteRows' &&
+    e.tableMap[e.tableId].tableName === 'capture_mariadb');
+  test.equal(writes.length, 3);
+  const row = writes[0].rows[0];
+  test.equal(row.u, '11111111-2222-3333-4444-555555555555', 'UUID');
+  test.equal(row.i4, '192.168.1.10', 'INET4');
+  test.equal(row.i6, '::ffff:8.8.8.8', 'INET6 v4-mapped');
+  test.strictSame(row.v, Buffer.from('0000c03f0000204000006040', 'hex'),
+    'VECTOR as raw little-endian float32 buffer');
+  test.equal(row.j, '{"a": 1}', 'MariaDB JSON is LONGTEXT text');
+  test.equal(row.vc_comp, 'squash-'.repeat(30),
+    'zlib COMPRESSED column value');
+  test.equal(row.txt_comp, 'café latin one', 'latin1 COMPRESSED text');
+  test.equal(writes[1].rows[0].i6, '::',
+    'all-zero INET6 re-padded from a stripped row image');
+  test.equal(writes[2].rows[0].vc_comp, 'flat-'.repeat(40),
+    'row decoded from a compressed row event (log_bin_compress)');
+
+  const hires = events.find(e => e.getTypeName() === 'WriteRows' &&
+    e.tableMap[e.tableId].tableName === 'capture_hires').rows[0];
+  test.ok(hires.dt3 instanceof Date);
+  test.equal(hires.dt3.toISOString(), '2024-06-15T12:34:56.789Z',
+    'hires DATETIME(3)');
+  test.equal(hires.t3, '-01:02:03.500', 'negative hires TIME(3)');
+  test.equal(hires.ts3, '2024-06-15 12:34:56.789',
+    'hires TIMESTAMP(3) as string via dateStrings');
+  test.end();
+});

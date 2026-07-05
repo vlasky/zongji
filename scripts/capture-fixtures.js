@@ -92,6 +92,54 @@ const captureStatements = [
   `UPDATE ${CAPTURE_TABLE} SET id = 2, vc = 'updated' WHERE id = 1`,
   `DELETE FROM ${CAPTURE_TABLE} WHERE id = 2`,
   `INSERT INTO ${CAPTURE_TABLE} (id) VALUES (3)`, // all other columns NULL
+];
+
+// MariaDB-specific coverage: logical types riding on BINARY/VARBINARY
+// codes, COMPRESSED columns, 5.3 "hires" temporals (the GLOBAL-only
+// format switch is baked in at CREATE time and restored immediately),
+// and log_bin_compress event envelopes.
+const MARIADB_TABLE = 'capture_mariadb';
+const MARIADB_HIRES_TABLE = 'capture_hires';
+const mariadbStatements = [
+  `CREATE TABLE ${MARIADB_TABLE} (
+    id INT PRIMARY KEY,
+    u UUID,
+    i4 INET4,
+    i6 INET6,
+    v VECTOR(3),
+    j JSON,
+    vc_comp VARCHAR(300) COMPRESSED,
+    txt_comp TEXT COMPRESSED CHARACTER SET latin1
+  )`,
+  `INSERT INTO ${MARIADB_TABLE} VALUES (
+    1,
+    '11111111-2222-3333-4444-555555555555',
+    '192.168.1.10',
+    '::ffff:8.8.8.8',
+    VEC_FromText('[1.5,2.5,3.5]'),
+    '{"a": 1}',
+    REPEAT('squash-', 30),
+    'caf\xE9 latin one'
+  )`,
+  `INSERT INTO ${MARIADB_TABLE} (id, i6) VALUES (2, '::')`,
+  'SET GLOBAL mysql56_temporal_format = OFF',
+  `CREATE TABLE ${MARIADB_HIRES_TABLE} (
+    dt3 DATETIME(3),
+    t3 TIME(3),
+    ts3 TIMESTAMP(3) NULL
+  )`,
+  'SET GLOBAL mysql56_temporal_format = ON',
+  `INSERT INTO ${MARIADB_HIRES_TABLE} VALUES
+    ('2024-06-15 12:34:56.789', '-01:02:03.500', '2024-06-15 12:34:56.789')`,
+  'SET GLOBAL log_bin_compress = ON',
+  'SET GLOBAL log_bin_compress_min_len = 10',
+  `INSERT INTO ${MARIADB_TABLE} (id, vc_comp)
+    VALUES (3, REPEAT('flat-', 40))`,
+  'SET GLOBAL log_bin_compress = OFF',
+  'SET GLOBAL log_bin_compress_min_len = 256',
+];
+
+const closingStatements = [
   'FLUSH LOGS', // real Rotate event
   'SET @@session.time_zone = "SYSTEM"',
 ];
@@ -107,6 +155,7 @@ async function main() {
   await query(admin, `DROP DATABASE IF EXISTS ${FIXTURE_DB}`);
   await query(admin, `CREATE DATABASE ${FIXTURE_DB}`);
   const versionRows = await query(admin, 'SELECT VERSION() AS version');
+  const isMariaDb = versionRows[0].version.includes('MariaDB');
 
   let originalRowMetadata;
   if (FULL_METADATA) {
@@ -150,7 +199,12 @@ async function main() {
     const work = mysql.createConnection(
       { ...connectionSettings, database: FIXTURE_DB });
     try {
-      for (const sql of captureStatements) {
+      const statements = [
+        ...captureStatements,
+        ...(isMariaDb ? mariadbStatements : []),
+        ...closingStatements,
+      ];
+      for (const sql of statements) {
         await query(work, sql);
       }
     } finally {
@@ -164,6 +218,10 @@ async function main() {
       const minimumCounts = {
         TableMap: 4, WriteRows: 2, UpdateRows: 1, DeleteRows: 1,
         Xid: 1, Query: 1, Rotate: 2,
+        ...(isMariaDb ? {
+          MariadbGtid: 5, AnnotateRows: 3,
+          MariadbGtidList: 1, BinlogCheckpoint: 1,
+        } : {}),
       };
       const missing = Object.entries(minimumCounts).filter(([type, min]) =>
         eventSummary.filter(name => name === type).length < min);
@@ -217,7 +275,8 @@ async function main() {
     }, 2000);
   });
 
-  zongji.start({ startAtEnd: true, serverId: 999 });
+  // requestAnnotateRows only has an effect on MariaDB (dump flag 0x02)
+  zongji.start({ startAtEnd: true, serverId: 999, requestAnnotateRows: true });
 }
 
 main().catch(err => {

@@ -25,6 +25,11 @@ export interface ZongJiOptions {
   gtidSet?: string;
   /** If true, use non-blocking mode */
   nonBlock?: boolean;
+  /**
+   * MariaDB only: request ANNOTATE_ROWS events (the SQL statement text
+   * preceding each row operation's TableMap events). Ignored on MySQL.
+   */
+  requestAnnotateRows?: boolean;
   /** List of event types to include (e.g., ['tablemap', 'writerows']) */
   includeEvents?: string[];
   /** List of event types to exclude */
@@ -527,6 +532,7 @@ declare class ZongJi extends EventEmitter {
     startAtEnd?: boolean;
     gtidSet?: string;
     nonBlock?: boolean;
+    requestAnnotateRows?: boolean;
   };
   /**
    * The transactions this instance knows to be processed: the start()

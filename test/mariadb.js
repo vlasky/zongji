@@ -470,6 +470,86 @@ testDb.requireMariaDb(() => {
     });
   });
 
+  tap.test('requestAnnotateRows delivers statement text', test => {
+    const TEST_TABLE = 'mariadb_annotate_test';
+
+    // Annotate events are only sent when the dump requests them; a
+    // second instance without the option must see none
+    const withOption = new ZongJi(settings.connection);
+    const withoutOption = new ZongJi(settings.connection);
+    test.teardown(() => withOption.stop());
+    test.teardown(() => withoutOption.stop());
+    withOption.on('error', err => test.fail(err));
+    withoutOption.on('error', err => test.fail(err));
+
+    const annotations = [];
+    let rowSeen = false;
+    withOption.on('binlog', evt => {
+      if (evt.getTypeName() === 'AnnotateRows') {
+        annotations.push(evt.statement);
+      }
+      if (evt.getTypeName() === 'WriteRows') {
+        rowSeen = true;
+      }
+    });
+    let unrequestedAnnotations = 0;
+    withoutOption.on('binlog', evt => {
+      if (evt.getTypeName() === 'AnnotateRows') {
+        unrequestedAnnotations++;
+      }
+    });
+
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      const startOptions = {
+        startAtEnd: true,
+        includeEvents: ['annotaterows', 'tablemap', 'writerows'],
+      };
+      withOption.start({
+        ...startOptions,
+        serverId: testDb.serverId(),
+        requestAnnotateRows: true,
+      });
+      withoutOption.start({
+        ...startOptions,
+        serverId: testDb.serverId(),
+      });
+
+      let readyCount = 0;
+      const onReady = () => {
+        if (++readyCount < 2) {
+          return;
+        }
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (42)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          setTimeout(() => {
+            test.ok(rowSeen, 'row event delivered alongside annotations');
+            test.equal(annotations.length, 1,
+              'one annotate event per row statement');
+            test.match(annotations[0],
+              new RegExp(`INSERT INTO ${TEST_TABLE}`),
+              'annotation carries the originating SQL text');
+            test.equal(unrequestedAnnotations, 0,
+              'no annotate events without the option');
+            test.end();
+          }, 1000);
+        });
+      };
+      withOption.on('ready', onReady);
+      withoutOption.on('ready', onReady);
+    });
+  });
+
   tap.test('resume from a persisted GTID position delivers only new transactions', test => {
     const TEST_TABLE = 'mariadb_resume_test';
 
