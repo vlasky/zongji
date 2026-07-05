@@ -45,6 +45,8 @@ class ZongJi extends EventEmitter {
     this._starting = false;
     this._startEpoch = 0;
     this.useChecksum = false;
+    this.serverVersion = undefined;
+    this.isMariaDb = false;
 
     this._dsn = dsn;
     this.ctrlConnection = null;
@@ -464,6 +466,28 @@ class ZongJi extends EventEmitter {
     this._options(options);
     this._filters(options);
 
+    // Server flavour steers the rest of the preamble: MariaDB has no
+    // gtid_mode/gtid_executed (its GTIDs are domain-server-sequence
+    // watermarks, always on) and needs its own dump-request dialect.
+    // SELECT VERSION() is used rather than the handshake packet because
+    // MariaDB prefixes the handshake version with "5.5.5-" for old-client
+    // compatibility, while VERSION() always reports e.g.
+    // "11.8.8-MariaDB-ubu2404-log".
+    const detectServer = (resolve, reject) => {
+      this.ctrlConnection.query('SELECT VERSION() AS version', (err, rows) => {
+        // Never overwrite state belonging to a newer start()
+        if (epoch !== this._startEpoch) {
+          return resolve();
+        }
+        if (err) {
+          return reject(err);
+        }
+        this.serverVersion = rows[0].version;
+        this.isMariaDb = /mariadb/i.test(this.serverVersion);
+        resolve();
+      });
+    };
+
     const testChecksum = (resolve, reject) => {
       this._isChecksumEnabled((err, checksumEnabled) => {
         if (err) {
@@ -608,23 +632,34 @@ class ZongJi extends EventEmitter {
       // emitting the first table's rows advances past the later
       // TableMaps); the complete fix is advancing only at transaction
       // boundaries, tracked pre-filter.
+      // MariaDB writes end_log_pos=0 on every event inside a transaction
+      // (TableMap, row events); only commits and standalone events carry a
+      // real position. Adopting a zero would corrupt the resume point.
       const typeName = event.getTypeName();
-      if (typeName !== 'TableMap' && typeName !== 'Rotate') {
+      if (typeName !== 'TableMap' && typeName !== 'Rotate' &&
+          event.nextPosition > 0) {
         this.options.position = event.nextPosition;
       }
       this.emit('binlog', attachGtid(event));
     };
 
-    let promises = [new Promise(testChecksum)];
+    // Detection must complete before the rest of the preamble because the
+    // seed query below is MySQL-only
+    new Promise(detectServer)
+      .then(() => {
+        let promises = [new Promise(testChecksum)];
 
-    if (this.options.startAtEnd) {
-      promises.push(new Promise(findBinlogEnd));
-      if (this._executedGtids === null) {
-        promises.push(new Promise(seedGtidsFromServer));
-      }
-    }
+        if (this.options.startAtEnd) {
+          promises.push(new Promise(findBinlogEnd));
+          // MariaDB has no @@GLOBAL.gtid_executed; until MariaDB GTID
+          // tracking is implemented, gtidSet stays undefined there
+          if (this._executedGtids === null && !this.isMariaDb) {
+            promises.push(new Promise(seedGtidsFromServer));
+          }
+        }
 
-    Promise.all(promises)
+        return Promise.all(promises);
+      })
       .then(() => {
         // Abort if a newer start() superseded this one (after a stop())
         // while promises were pending

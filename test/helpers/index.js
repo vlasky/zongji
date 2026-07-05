@@ -18,15 +18,18 @@ export function init(done) {
       return done(err);
     }
 
-    const ver = results[results.length - 1][0]
-      .version.split('-')[0]
+    const versionString = results[results.length - 1][0].version;
+    const ver = versionString.split('-')[0]
       .split('.')
       .map(part => parseInt(part, 10));
 
-    // MySQL 8.4+ uses RESET BINARY LOGS AND GTIDS instead of RESET MASTER
-    const resetCommand = (ver[0] > 8 || (ver[0] === 8 && ver[1] >= 4))
-      ? 'RESET BINARY LOGS AND GTIDS'
-      : 'RESET MASTER';
+    // MySQL 8.4+ uses RESET BINARY LOGS AND GTIDS instead of RESET MASTER;
+    // MariaDB keeps RESET MASTER regardless of its (higher) version numbers
+    const isMariaDb = versionString.includes('MariaDB');
+    const resetCommand =
+      (!isMariaDb && (ver[0] > 8 || (ver[0] === 8 && ver[1] >= 4)))
+        ? 'RESET BINARY LOGS AND GTIDS'
+        : 'RESET MASTER';
 
     querySequence(
       conn,

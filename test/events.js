@@ -881,8 +881,13 @@ tap.test('resume position never lands after a TableMap event', test => {
     const type = evt.getTypeName();
     if (type === 'TableMap' && evt.tableName === TEST_TABLE) {
       tableMapCount++;
-      test.ok(zongji.options.position < evt.nextPosition,
-        'position held back at TableMap #' + tableMapCount);
+      // MariaDB writes end_log_pos=0 on events inside a transaction, so
+      // the held-back position can only be compared where the event
+      // carries a real end position (MySQL always does)
+      if (evt.nextPosition > 0) {
+        test.ok(zongji.options.position < evt.nextPosition,
+          'position held back at TableMap #' + tableMapCount);
+      }
       if (tableMapCount === 2) {
         // The second TableMap goes through the cached-metadata path,
         // which used to advance the position past itself
