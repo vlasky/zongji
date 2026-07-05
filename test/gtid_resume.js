@@ -263,3 +263,19 @@ tap.test('invalid gtidSet rejected before any connection work', test => {
     test.end();
   });
 });
+
+tap.test('MariaDB-format gtidSet is rejected against MySQL', test => {
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  zongji.on('error', err => {
+    test.match(err.message, /MariaDB GTID position but the server is MySQL/);
+    test.end();
+  });
+  zongji.on('binlog', () => test.fail('no events expected'));
+
+  zongji.start({
+    serverId: testDb.serverId(),
+    gtidSet: '0-1-1234',
+  });
+});

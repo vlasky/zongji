@@ -129,20 +129,172 @@ testDb.requireMariaDb(() => {
     });
   });
 
-  tap.test('gtidSet start is rejected clearly on MariaDB', test => {
+  tap.test('resume from a persisted GTID position delivers only new transactions', test => {
+    const TEST_TABLE = 'mariadb_resume_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    zongji.on('error', err => test.fail(err));
+
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      // startAtEnd seeds the position from @@GLOBAL.gtid_current_pos
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        test.ok(zongji.gtidSet !== undefined,
+          'startAtEnd seeds gtidSet on MariaDB');
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+          `INSERT INTO ${TEST_TABLE} (col) VALUES (2)`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          setTimeout(() => {
+            const checkpoint = zongji.gtidSet;
+            test.match(checkpoint, /^\d+-\d+-\d+(,\d+-\d+-\d+)*$/,
+              'checkpoint is a MariaDB GTID position');
+            zongji.stop();
+
+            testDb.execute([
+              `INSERT INTO ${TEST_TABLE} (col) VALUES (3)`,
+              `INSERT INTO ${TEST_TABLE} (col) VALUES (4)`,
+            ], moreErr => {
+              if (moreErr) {
+                return test.fail(moreErr);
+              }
+
+              const resumed = new ZongJi(settings.connection);
+              test.teardown(() => resumed.stop());
+              resumed.on('error', resumeErr => test.fail(resumeErr));
+
+              const rows = [];
+              resumed.on('binlog', evt => {
+                if (evt.getTypeName() === 'WriteRows' &&
+                    evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+                  rows.push(evt.rows[0].col);
+                }
+              });
+
+              resumed.start({
+                gtidSet: checkpoint,
+                serverId: testDb.serverId(),
+                includeEvents: ['tablemap', 'writerows'],
+              });
+
+              resumed.on('ready', () => {
+                setTimeout(() => {
+                  test.strictSame(rows, [3, 4],
+                    'transactions up to the checkpoint are skipped ' +
+                    'server-side');
+                  test.ok(resumed.gtidSet !== undefined &&
+                      resumed.gtidSet !== checkpoint,
+                    'resumed position extends past the checkpoint');
+                  test.end();
+                }, 1500);
+              });
+            });
+          }, 1000);
+        });
+      });
+    });
+  });
+
+  tap.test('empty GTID position replays the full available history', test => {
+    const TEST_TABLE = 'mariadb_resume_test'; // written by the test above
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    zongji.on('error', err => test.fail(err));
+
+    const rows = [];
+    zongji.on('binlog', evt => {
+      if (evt.getTypeName() === 'WriteRows' &&
+          evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+        rows.push(evt.rows[0].col);
+      }
+    });
+
+    zongji.start({
+      gtidSet: '',
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      setTimeout(() => {
+        test.strictSame(rows, [1, 2, 3, 4],
+          'the whole binlog history streams from the oldest file');
+        test.end();
+      }, 1500);
+    });
+  });
+
+  tap.test('GTID position ahead of the binlog surfaces an explicit error', test => {
     const zongji = new ZongJi(settings.connection);
     test.teardown(() => zongji.stop());
 
     zongji.on('error', err => {
-      test.match(err.message, /not yet supported against MariaDB/);
+      test.match(err.message, /not in the master's binlog/i,
+        'explicit GTID-not-found error');
+      test.end();
+    });
+    zongji.on('binlog', () => test.fail('no events expected'));
+
+    zongji.start({
+      gtidSet: '0-1-99999999',
+      serverId: testDb.serverId(),
+    });
+  });
+
+  tap.test('MySQL-format gtidSet is rejected against MariaDB', test => {
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+
+    zongji.on('error', err => {
+      test.match(err.message, /MySQL GTID set but the server is MariaDB/);
       test.end();
     });
     zongji.on('binlog', () => test.fail('no events expected'));
 
     zongji.start({
       serverId: testDb.serverId(),
-      // A MySQL-style set: parses fine, but MariaDB cannot serve it
       gtidSet: '00000000-0000-0000-0000-000000000000:1-5',
+    });
+  });
+
+  tap.test('gtidSet seeds from the stream when reading from the start', test => {
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    zongji.on('error', err => test.fail(err));
+    zongji.on('binlog', () => {});
+
+    // No filename/position: the dump starts at the oldest binlog file and
+    // the GTID list at its start is the seed
+    zongji.start({
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    zongji.on('ready', () => {
+      setTimeout(() => {
+        test.ok(zongji.gtidSet !== undefined,
+          'position seeded from the stream GTID list');
+        test.match(zongji.gtidSet, /^$|^\d+-\d+-\d+(,\d+-\d+-\d+)*$/,
+          'seeded value is a MariaDB GTID position');
+        test.end();
+      }, 1500);
     });
   });
 });

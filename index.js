@@ -2,6 +2,7 @@ import mysql from 'mysql2';
 import { EventEmitter } from 'events';
 import initBinlogClass from './lib/sequence/binlog.js';
 import { GtidSet } from './lib/gtid_set.js';
+import { MariadbGtidPosition } from './lib/mariadb_gtid.js';
 
 const ConnectionConfigMap = {
   'Connection': obj => obj.config,
@@ -40,6 +41,7 @@ class ZongJi extends EventEmitter {
     this._executedGtids = null;
     this._pendingGtid = undefined;
     this._seedGtidsFromStream = false;
+    this._startFromGtids = false;
     this.ready = false;
     this.stopped = false;
     this._starting = false;
@@ -198,11 +200,13 @@ class ZongJi extends EventEmitter {
       });
   }
 
-  // The set of transactions this instance knows to be processed: the
-  // start() seed plus every transaction whose commit has been observed.
-  // Persist it and pass to start({ gtidSet }) to resume, including on a
-  // different server in the same replication topology. Undefined when no
-  // exact seed was available (see start()).
+  // The transactions this instance knows to be processed: the start()
+  // seed plus every transaction whose commit has been observed. Persist
+  // it and pass to start({ gtidSet }) to resume, including on a different
+  // server in the same replication topology. A MySQL GTID set
+  // ('uuid:1-5,...') or a MariaDB GTID position ('0-1-1234,...')
+  // depending on the connected server. Undefined when no exact seed was
+  // available (see start()).
   get gtidSet() {
     return this._executedGtids ? this._executedGtids.toString() : undefined;
   }
@@ -256,6 +260,26 @@ class ZongJi extends EventEmitter {
           } catch {
             // Leave unseeded; gtidSet stays undefined
           }
+        }
+        break;
+      case 'mariadbgtid':
+        // As with 'gtid': a new event group implies the previous one
+        // completed. This also closes standalone groups (DDL), which have
+        // no commit marker at all
+        fold();
+        this._pendingGtid = {
+          domainId: event.domainId,
+          serverId: event.serverId,
+          seqNo: event.seqNo,
+        };
+        break;
+      case 'mariadbgtidlist':
+        // At the start of a binlog file this is the exact "everything
+        // before this point" seed, MariaDB's Previous_gtids analogue.
+        // Fake mid-stream lists on GTID connects never seed: the position
+        // is already non-null then
+        if (this._seedGtidsFromStream && this._executedGtids === null) {
+          this._executedGtids = MariadbGtidPosition.fromGtidList(event.gtids);
         }
         break;
     }
@@ -444,9 +468,15 @@ class ZongJi extends EventEmitter {
     // undefined there.
     this._executedGtids = null;
     this._seedGtidsFromStream = false;
-    if (options.gtidSet != null) {
+    this._startFromGtids = options.gtidSet != null;
+    if (this._startFromGtids) {
+      // The flavour is sniffed from the format (a MySQL set always
+      // contains ':', a MariaDB position never does; '' is valid for
+      // either) and verified against the server after detection
       try {
-        this._executedGtids = GtidSet.parse(options.gtidSet);
+        this._executedGtids = String(options.gtidSet).includes(':')
+          ? GtidSet.parse(options.gtidSet)
+          : MariadbGtidPosition.parse(options.gtidSet);
       } catch (err) {
         this._starting = false;
         this.emit('error', err);
@@ -658,31 +688,91 @@ class ZongJi extends EventEmitter {
       });
     };
 
+    // MariaDB has no COM_BINLOG_DUMP_GTID: the resume position travels in
+    // the @slave_connect_state session variable and the dump command is a
+    // plain COM_BINLOG_DUMP whose filename/position the server then
+    // ignores. An empty position means "from the oldest binlog available"
+    const setMariaDbConnectState = (resolve, reject) => {
+      // Validated as digits/dashes/commas by the parser, so safe to inline
+      const position = this._executedGtids.toString();
+      this.connection.query(
+        `SET @slave_connect_state='${position}'`, (err) => {
+          if (epoch !== this._startEpoch) {
+            return resolve();
+          }
+          if (err) {
+            return reject(err);
+          }
+          resolve();
+        });
+    };
+
+    // MariaDB's analogue of the gtid_executed seed below: the last GTID
+    // per domain in the binlog or applied by a slave thread, whichever is
+    // most recent (matches what a real replica would send on connect)
+    const seedMariaDbGtidsFromServer = (resolve, reject) => {
+      this.ctrlConnection.query(
+        'SELECT @@GLOBAL.gtid_current_pos AS gtidPos', (err, rows) => {
+          if (epoch !== this._startEpoch) {
+            return resolve();
+          }
+          if (err) {
+            return reject(err);
+          }
+          try {
+            this._executedGtids =
+              MariadbGtidPosition.parse(rows[0].gtidPos.trim());
+          } catch (parseErr) {
+            return reject(parseErr);
+          }
+          resolve();
+        });
+    };
+
     // Detection must complete before the rest of the preamble because the
     // seed query below is MySQL-only
     new Promise(detectServer)
       .then(() => {
-        if (this.isMariaDb && this.options.gtidSet != null) {
-          // MariaDB resumes by GTID through @slave_connect_state, not
-          // COM_BINLOG_DUMP_GTID (which it answers with
-          // ER_UNKNOWN_COM_ERROR); reject clearly until that path exists
-          throw new Error(
-            'GTID-based resume is not yet supported against MariaDB ' +
-            'servers; start with filename/position instead');
+        if (this._startFromGtids) {
+          // The start set was parsed by format before the server flavour
+          // was known; an empty position is valid for either flavour,
+          // anything else must match the connected server
+          const isMariaDbPosition =
+            this._executedGtids instanceof MariadbGtidPosition;
+          if (isMariaDbPosition !== this.isMariaDb) {
+            if (this._executedGtids.isEmpty()) {
+              this._executedGtids = this.isMariaDb
+                ? new MariadbGtidPosition()
+                : new GtidSet();
+            } else if (this.isMariaDb) {
+              throw new Error(
+                'gtidSet is a MySQL GTID set but the server is MariaDB; ' +
+                'pass a MariaDB GTID position instead ' +
+                '(domain-server-sequence, e.g. \'0-1-1234\')');
+            } else {
+              throw new Error(
+                'gtidSet is a MariaDB GTID position but the server is ' +
+                'MySQL; pass a MySQL GTID set instead ' +
+                '(e.g. \'uuid:1-5\')');
+            }
+          }
         }
 
         let promises = [new Promise(testChecksum)];
 
         if (this.isMariaDb) {
           promises.push(new Promise(setMariaDbCapability));
+          if (this._startFromGtids) {
+            promises.push(new Promise(setMariaDbConnectState));
+          }
         }
 
         if (this.options.startAtEnd) {
           promises.push(new Promise(findBinlogEnd));
-          // MariaDB has no @@GLOBAL.gtid_executed; until MariaDB GTID
-          // tracking is implemented, gtidSet stays undefined there
-          if (this._executedGtids === null && !this.isMariaDb) {
-            promises.push(new Promise(seedGtidsFromServer));
+          if (this._executedGtids === null) {
+            promises.push(new Promise(this.isMariaDb
+              ? seedMariaDbGtidsFromServer
+              : seedGtidsFromServer));
           }
         }
 

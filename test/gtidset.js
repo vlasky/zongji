@@ -2,6 +2,7 @@
 import tap from 'tap';
 
 import { GtidSet } from '../lib/gtid_set.js';
+import { MariadbGtidPosition } from '../lib/mariadb_gtid.js';
 import { PreviousGtids } from '../lib/binlog_event.js';
 import { Parser } from '../lib/reader.js';
 
@@ -95,5 +96,58 @@ tap.test('encode layout details', test => {
   test.equal(encoded.readBigUInt64LE(40), 6n, 'interval end is exclusive');
   test.equal(GtidSet.parse('').encode().length, 8,
     'empty set encodes as zero sids');
+  test.end();
+});
+
+tap.test('MariadbGtidPosition', test => {
+  test.test('parse round-trips', test => {
+    for (const text of ['', '0-1-5', '0-1-5,1-2-10', '2-4294967295-9007199254740991']) {
+      test.equal(MariadbGtidPosition.parse(text).toString(), text);
+    }
+    // Whitespace tolerated, output sorted by domain
+    test.equal(MariadbGtidPosition.parse(' 1-2-3 , 0-1-5 ').toString(),
+      '0-1-5,1-2-3');
+    // seq_no beyond 2^53 survives exactly
+    test.equal(MariadbGtidPosition.parse('0-1-18446744073709551615').toString(),
+      '0-1-18446744073709551615');
+    test.end();
+  });
+
+  test.test('invalid positions are rejected', test => {
+    const bad = ['0-1', '0-1-2-3', 'a-1-2', '1e3-1-1', '0x10-1-1',
+      '0-1-1.0', '4294967296-1-1', '0-1-18446744073709551616',
+      '0-1-5,0-2-6' /* duplicate domain */];
+    for (const text of bad) {
+      test.throws(() => MariadbGtidPosition.parse(text), text);
+    }
+    test.end();
+  });
+
+  test.test('add overwrites the domain watermark', test => {
+    const position = MariadbGtidPosition.parse('0-1-5');
+    position.add({ domainId: 0, serverId: 2, seqNo: 3 });
+    // Deliberately not a max: "last processed" wins after a failover
+    test.equal(position.toString(), '0-2-3');
+    position.add({ domainId: 7, serverId: 1, seqNo: 1 });
+    test.equal(position.toString(), '0-2-3,7-1-1');
+    test.end();
+  });
+
+  test.test('fromGtidList keeps the last entry per domain', test => {
+    const position = MariadbGtidPosition.fromGtidList([
+      { domainId: 0, serverId: 1, seqNo: 5 },
+      { domainId: 1, serverId: 1, seqNo: 2 },
+      { domainId: 0, serverId: 3, seqNo: 4 },
+    ]);
+    test.equal(position.toString(), '0-3-4,1-1-2');
+    test.end();
+  });
+
+  test.test('isEmpty', test => {
+    test.equal(MariadbGtidPosition.parse('').isEmpty(), true);
+    test.equal(MariadbGtidPosition.parse('0-1-1').isEmpty(), false);
+    test.end();
+  });
+
   test.end();
 });

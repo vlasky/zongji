@@ -12,12 +12,15 @@ export interface ZongJiOptions {
   /** Binlog position to start from */
   position?: number;
   /**
-   * Executed GTID set to resume from (e.g. a persisted zongji.gtidSet).
-   * Uses COM_BINLOG_DUMP_GTID: the server locates the right binlog file
-   * and skips transactions already in the set, so this works across
-   * failover to another server in the same topology. Requires
-   * gtid_mode=ON. '' streams the server's entire available history.
-   * Takes precedence over filename/position.
+   * Executed GTIDs to resume from (e.g. a persisted zongji.gtidSet): a
+   * MySQL GTID set ('uuid:1-5,...') or a MariaDB GTID position
+   * ('0-1-1234,...'), matching the server flavour. The server locates
+   * the right binlog file and skips transactions already processed
+   * (MySQL: COM_BINLOG_DUMP_GTID, requires gtid_mode=ON; MariaDB:
+   * @slave_connect_state, always available), so this works across
+   * failover to another server in the same topology. '' streams the
+   * server's entire available history. Takes precedence over
+   * filename/position.
    */
   gtidSet?: string;
   /** If true, use non-blocking mode */
@@ -536,11 +539,13 @@ declare class ZongJi extends EventEmitter {
     nonBlock?: boolean;
   };
   /**
-   * The set of transactions this instance knows to be processed: the
-   * start() seed plus every transaction whose commit has been observed.
-   * Persist it and pass to start({ gtidSet }) to resume, including on a
-   * different server. Undefined when no exact seed was available (a
-   * mid-file file+position start).
+   * The transactions this instance knows to be processed: the start()
+   * seed plus every transaction whose commit has been observed. A MySQL
+   * GTID set ('uuid:1-5,...') or a MariaDB GTID position ('0-1-1234,...')
+   * depending on the connected server. Persist it and pass to
+   * start({ gtidSet }) to resume, including on a different server.
+   * Undefined when no exact seed was available (a mid-file file+position
+   * start).
    */
   readonly gtidSet: string | undefined;
   /** Current filter settings */
