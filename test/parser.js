@@ -499,6 +499,29 @@ tap.test('tagged GTID specimens decode', test => {
   // Unknown format bytes must be rejected, not misread as sid counts
   test.throws(() => decode(PreviousGtids, '0100000000000002deadbeef'),
     /Unknown GTID set encoding format/);
+
+  // A body shorter than the sid-count field must not absorb the CRC
+  test.throws(() => decode(PreviousGtids, '01000000deadbeef'),
+    /Truncated PreviousGtids/);
+
+  // A corrupt encoded_size smaller than the real field data must not
+  // let field reads continue beyond the declared message
+  const corruptSize = '02' + '08' + TAGGED_GTID_BODY.slice(4);
+  test.throws(() => decode(Gtid, corruptSize, { eventType: 42 }),
+    'field reads are bounded by the declared message size');
+
+  // Entries not in the server's canonical (uuid, tag)-sorted order must
+  // still print as parseable text: tagged entry first, untagged second
+  const unsorted = decode(PreviousGtids,
+    '0102000000000001' +
+    'fb5b7041775411f1a067e69d25af13b40a7461675f61' +
+    '010000000000000001000000000000000200000000000000' +
+    'fb5b7041775411f1a067e69d25af13b400' +
+    '010000000000000002000000000000000300000000000000' +
+    'deadbeef');
+  test.equal(unsorted.gtidSet,
+    'fb5b7041-7754-11f1-a067-e69d25af13b4:2:tag_a:1',
+    'untagged intervals print first regardless of wire order');
   test.end();
 });
 
