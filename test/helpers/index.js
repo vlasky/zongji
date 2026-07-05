@@ -150,6 +150,12 @@ export function requireMySql(done) {
   });
 }
 
+// Promise form for top-level await; lets files pass tap's { skip } option
+// to individual MySQL-only or MariaDB-only tests without reordering them
+export function isMariaDb() {
+  return new Promise(resolve => checkFlavour(resolve));
+}
+
 let id = 100;
 export function serverId() {
   id ++;

@@ -19,7 +19,12 @@ tap.test('Initialise testing db', async test => {
   }
 });
 
+const IS_MARIADB = await testDb.isMariaDb();
+const MYSQL_ONLY =
+  IS_MARIADB && 'MySQL gtid_mode only; see test/mariadb.js';
+
 tap.test('resume from a persisted gtidSet delivers only new transactions',
+  { skip: MYSQL_ONLY },
   test => {
     const first = new ZongJi(settings.connection);
     test.teardown(() => first.stop());
@@ -114,7 +119,8 @@ tap.test('resume from a persisted gtidSet delivers only new transactions',
     };
   });
 
-tap.test('empty gtidSet streams the entire available history', test => {
+tap.test('empty gtidSet streams the entire available history',
+  { skip: MYSQL_ONLY }, test => {
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => zongji.stop());
   zongji.on('error', err => test.fail(err));
@@ -144,7 +150,8 @@ tap.test('empty gtidSet streams the entire available history', test => {
   });
 });
 
-tap.test('purged required GTIDs surface as an explicit error', test => {
+tap.test('purged required GTIDs surface as an explicit error',
+  { skip: MYSQL_ONLY }, test => {
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => zongji.stop());
 
@@ -187,7 +194,8 @@ tap.test('purged required GTIDs surface as an explicit error', test => {
   });
 });
 
-tap.test('gtidSet never claims an uncommitted XA transaction', test => {
+tap.test('gtidSet never claims an uncommitted XA transaction',
+  { skip: MYSQL_ONLY }, test => {
   const TABLE = 'gtid_xa_test';
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => new Promise(resolve => {

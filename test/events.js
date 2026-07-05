@@ -6,6 +6,8 @@ import expectEvents from './helpers/expectEvents.js';
 import * as testDb from './helpers/index.js';
 import settings from './settings/mysql.js';
 
+const IS_MARIADB = await testDb.isMariaDb();
+
 const checkTableMatches = function(tableName) {
   return function(test, event) {
     const tableDetails = event.tableMap[event.tableId];
@@ -517,7 +519,9 @@ tap.test('Binlog checksum enabled', test => {
   });
 });
 
-tap.test('GTID events', test => {
+tap.test('GTID events',
+  { skip: IS_MARIADB && 'MySQL gtid_mode only; see test/mariadb.js' },
+  test => {
   const TEST_TABLE = 'gtid_test';
   const zongji = new ZongJi(settings.connection);
   test.teardown(() => zongji.stop());
@@ -618,7 +622,11 @@ tap.test('Table name containing quote characters', test => {
 // which zongji cannot decode. The row changes are dropped, but an error must
 // be emitted (once) so the data loss is not silent.
 testDb.requireVersion('8.0.20', () => {
-  tap.test('Transaction compression emits unsupported-event error', test => {
+  tap.test('Transaction compression emits unsupported-event error',
+    { skip: IS_MARIADB &&
+      'binlog_transaction_compression is MySQL-only (MariaDB uses ' +
+      'log_bin_compress, which zongji decodes)' },
+    test => {
     const TEST_TABLE = 'txn_compression_test';
 
     const zongji = new ZongJi(settings.connection);
@@ -737,7 +745,9 @@ tap.test('Binlog stream with connection compression', test => {
 // event.gtid: row events carry the GTID of their transaction even when
 // 'gtid' events are excluded from includeEvents. Runs with gtid_mode=ON
 // (enabled here if necessary, as in the GTID events test above).
-tap.test('event.gtid attached to row events', test => {
+tap.test('event.gtid attached to row events',
+  { skip: IS_MARIADB && 'MySQL gtid_mode only; see test/mariadb.js' },
+  test => {
   const TEST_TABLE = 'event_gtid_test';
   const GTID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d+$/;
 

@@ -32,13 +32,13 @@ jobs:
         run: npm run checkjs
 
   test:
-    name: Test (MySQL ${{ matrix.mysql-version }}, Node ${{ matrix.node-version }})
+    name: Test (${{ matrix.server }}, Node ${{ matrix.node-version }})
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        mysql-version: ['5.7', '8.0', '8.4']
+        server: ['mysql:5.7', 'mysql:8.0', 'mysql:8.4', 'mariadb:11.8']
         node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@v5
@@ -52,37 +52,41 @@ jobs:
         run: npm ci
 
       # Service containers cannot pass command-line args to the server,
-      # and zongji needs binlog options, so start MySQL manually.
-      - name: Start MySQL ${{ matrix.mysql-version }}
+      # and zongji needs binlog options, so start the server manually.
+      # The mariadb image accepts MYSQL_ROOT_PASSWORD as a legacy alias.
+      - name: Start ${{ matrix.server }}
         run: |
           docker run -d --name mysql \
             -p 3306:3306 \
             -e MYSQL_ROOT_PASSWORD=secret \
-            mysql:${{ matrix.mysql-version }} \
+            ${{ matrix.server }} \
             --server-id=1 \
             --log-bin=/var/lib/mysql/mysql-bin.log \
             --binlog-format=row
 
-      - name: Wait for MySQL to be ready
+      - name: Wait for the server to be ready
         run: |
           # Check over TCP with a real query: the MySQL entrypoint runs a
           # temporary socket-only server during initialisation, so a plain
           # socket ping reports ready before the real server listens on 3306.
+          # The mariadb image ships only the mariadb client binary.
           for i in $(seq 1 60); do
-            if docker exec mysql mysql --protocol=tcp -h127.0.0.1 -uroot -psecret \
-                -e 'SELECT 1' >/dev/null 2>&1; then
-              echo "MySQL is ready (attempt $i)"
+            if docker exec mysql sh -c \
+                "mariadb --protocol=tcp -h127.0.0.1 -uroot -psecret -e 'SELECT 1' \
+                 || mysql --protocol=tcp -h127.0.0.1 -uroot -psecret -e 'SELECT 1'" \
+                >/dev/null 2>&1; then
+              echo "Server is ready (attempt $i)"
               exit 0
             fi
             sleep 2
           done
-          echo "MySQL did not become ready within 120 seconds" >&2
+          echo "Server did not become ready within 120 seconds" >&2
           exit 1
 
       - name: Run tests
         run: npm run test:only
 
-      - name: Dump MySQL logs on failure
+      - name: Dump server logs on failure
         if: failure()
         run: docker logs mysql
 

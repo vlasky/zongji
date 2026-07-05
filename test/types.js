@@ -3,6 +3,8 @@ import ZongJi from '../index.js';
 import expectEvents from './helpers/expectEvents.js';
 import * as testDb from './helpers/index.js';
 import settings from './settings/mysql.js';
+
+const IS_MARIADB = await testDb.isMariaDb();
 const strRepeat = testDb.strRepeat;
 
 
@@ -574,7 +576,11 @@ testDb.requireVersion('5.7.8', () => {
 // JavaScript values rather than JSON strings, and 64-bit integers beyond
 // the safe range are exact strings.
 testDb.requireVersion('5.7.8', () => {
-  tap.test('json object mode (jsonStrings not set)', test => {
+  tap.test('json object mode (jsonStrings not set)',
+    { skip: IS_MARIADB &&
+      'MariaDB JSON is a LONGTEXT alias: values are strings, matching ' +
+      'mysql2 query results (covered in test/mariadb.js)' },
+    test => {
     const TEST_TABLE = 'type_json_object_mode';
     const connection = { ...settings.connection };
     delete connection.jsonStrings;
