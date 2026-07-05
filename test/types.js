@@ -366,18 +366,21 @@ defineTypeTest('text', [
 ]);
 
 // Non-utf8 charsets must decode via the column's own charset; ucs2, utf16
-// and utf32 are stored big-endian (the row is compared against a mysql2
-// SELECT, whose results the server has converted to the connection charset)
+// and utf32 are stored big-endian, and a leading U+FEFF in them is data,
+// not a byte-order mark (the row is compared against a mysql2 SELECT,
+// whose results the server has converted to the connection charset)
 defineTypeTest('string_charsets', [
   'VARCHAR(20) CHARACTER SET latin1 NULL',
   'CHAR(10) CHARACTER SET latin1 NULL',
   'TEXT CHARACTER SET latin1 NULL',
   'VARCHAR(10) CHARACTER SET ucs2 NULL',
   'VARCHAR(10) CHARACTER SET utf16 NULL',
-  'VARCHAR(10) CHARACTER SET utf32 NULL'
+  'VARCHAR(10) CHARACTER SET utf32 NULL',
+  'VARCHAR(10) CHARACTER SET ujis NULL'
 ], [
-  ["'café ñ'", "'às-tu'", "'Ÿ é ü'", "'héllo'", "'wörld'", "'ütf32'"],
-  [null, null, null, null, null, null]
+  ["'café ñ'", "'às-tu'", "'Ÿ é ü'", "'\uFEFFhéllo'", "'wörld'", "'ütf32'",
+    "'こんにちは'"],
+  [null, null, null, null, null, null, null]
 ]);
 
 // ======= below require different version of MySQL =======
