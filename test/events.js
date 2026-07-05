@@ -878,6 +878,80 @@ tap.test('event.gtid detaches after the commit marker',
   }));
 });
 
+// XA PREPARE also ends a group's event delivery: the prepared
+// transaction's GTID must not spill onto unrelated events, while the
+// later XA COMMIT arrives under its own GTID.
+tap.test('event.gtid detaches after XA PREPARE',
+  { skip: IS_MARIADB && 'MySQL gtid_mode only' },
+  test => {
+  const TEST_TABLE = 'gtid_xa_detach_test';
+  const GTID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d+$/;
+
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => test.fail(err));
+
+  testDb.ensureGtidMode(() => testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows', 'xaprepare', 'rotate',
+        'query'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        "XA START 'detach1'",
+        `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+        "XA END 'detach1'",
+        "XA PREPARE 'detach1'",
+        'FLUSH LOGS', // a real rotate while the transaction is prepared
+        "XA COMMIT 'detach1'",
+      ], xaErr => {
+        if (xaErr) {
+          return test.fail(xaErr);
+        }
+        expectEvents(test, events, [
+          { _type: 'Rotate' }, // artificial, at dump start
+          { _type: 'Query' },  // XA START
+          tableMapEvent(TEST_TABLE),
+          { _type: 'WriteRows' },
+          { _type: 'Query' },  // XA END
+          { _type: 'XaPrepare' },
+          { _type: 'Rotate' }, // real, written by FLUSH LOGS
+          { _type: 'Rotate' }, // artificial, opening the new file
+          { _type: 'Query' },  // XA COMMIT
+        ], 1, () => {
+          const [, xaStart, tm, wr, xaEnd, prepare,
+            rotate1, rotate2, xaCommit] = events;
+          test.match(prepare.gtid, GTID_REGEX,
+            'the XA PREPARE event keeps its transaction GTID');
+          for (const evt of [xaStart, tm, wr, xaEnd]) {
+            test.equal(evt.gtid, prepare.gtid,
+              `${evt.getTypeName()} shares the transaction GTID`);
+          }
+          test.equal(rotate1.gtid, undefined,
+            'the rotate after XA PREPARE belongs to no transaction');
+          test.equal(rotate2.gtid, undefined);
+          test.match(xaCommit.gtid, GTID_REGEX);
+          test.not(xaCommit.gtid, prepare.gtid,
+            'XA COMMIT arrives under its own GTID');
+          test.end();
+        });
+      });
+    });
+  }));
+});
+
 // Regression: filters passed to a start() issued while a previous start()
 // is still initialising must be applied, not silently dropped. Consumers
 // (e.g. mysql-live-select) register tables between start() and 'ready'

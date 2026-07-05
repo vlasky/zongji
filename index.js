@@ -248,6 +248,12 @@ class ZongJi extends EventEmitter {
       case 'xid':
         fold();
         return true;
+      case 'xaprepare':
+        // Ends the group's event delivery on both flavours, but must NOT
+        // fold: the prepared transaction commits later under the XA
+        // COMMIT statement's own GTID, and the pending GTID folds when
+        // that (or any next) GTID event arrives
+        return true;
       case 'query': {
         // Fold only on definite commit markers. Anything else (BEGIN,
         // XA START/END, DDL, SAVEPOINT, ...) must not fold: claiming a
