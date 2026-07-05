@@ -601,7 +601,11 @@ class ZongJi extends EventEmitter {
 
       switch (event.getTypeName()) {
         case 'TableMap': {
-          if (event.hasSelfDescribingMetadata()) {
+          // On MariaDB, classic temporal codes may hide 5.3 "hires"
+          // columns that no binlog metadata (FULL included) can reveal;
+          // such tables must take the INFORMATION_SCHEMA path below
+          if (event.hasSelfDescribingMetadata() &&
+              !(this.isMariaDb && event.hasAmbiguousTemporalColumns())) {
             // MySQL 8.0+ with binlog_row_metadata=FULL: the event itself
             // carries complete column metadata as of binlog write time, so
             // no INFORMATION_SCHEMA round-trip (and no connection pause) is

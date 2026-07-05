@@ -435,7 +435,18 @@ testDb.requireMariaDb(() => {
           if (insertErr) {
             return test.fail(insertErr);
           }
+          // FULL metadata cannot describe hires columns; these inserts
+          // must fall back to the INFORMATION_SCHEMA path
           testDb.execute([
+            'SET GLOBAL binlog_row_metadata = FULL',
+            `INSERT INTO ${TEST_TABLE} VALUES (
+              '2024-05-06 07:08:09', '2024-05-06 07:08:09.123',
+              '2024-05-06 07:08:09.123000',
+              '2024-05-06 07:08:09', '2024-05-06 07:08:09.1',
+              '2024-05-06 07:08:09.123', '2024-05-06 07:08:09.123000',
+              '07:08:09', '07:08:09.12', '07:08:09.123',
+              '07:08:09.123456', '-01:02:03.004')`,
+            'SET GLOBAL binlog_row_metadata = NO_LOG',
             `SELECT * FROM ${TEST_TABLE}`,
           ], (selectErr, results) => {
             if (selectErr) {
@@ -444,10 +455,12 @@ testDb.requireMariaDb(() => {
             const expected = results[results.length - 1];
             setTimeout(() => {
               test.equal(rows.length, expected.length,
-                'both rows decoded');
+                'all rows decoded');
               for (let i = 0; i < expected.length; i++) {
                 test.strictSame(rows[i], { ...expected[i] },
-                  `row ${i + 1} matches the mysql2 query result`);
+                  `row ${i + 1} matches the mysql2 query result` +
+                  (i === expected.length - 1 ?
+                    ' (written under FULL metadata)' : ''));
               }
               test.end();
             }, 1000);

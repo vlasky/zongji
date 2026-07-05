@@ -248,6 +248,12 @@ export interface TableMapEvent extends BinlogEvent {
    * which case zongji decodes rows without querying INFORMATION_SCHEMA
    */
   hasSelfDescribingMetadata(): boolean;
+  /**
+   * True when the table contains classic temporal type codes, which on
+   * MariaDB may hide 5.3 "hires" columns that binlog metadata cannot
+   * reveal; such tables use the INFORMATION_SCHEMA path even under FULL
+   */
+  hasAmbiguousTemporalColumns(): boolean;
   /** Build ColumnSchema entries from the event's own metadata (FULL only) */
   buildColumnSchemas(): ColumnSchema[];
   /** Update column info after table metadata is available */
