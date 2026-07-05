@@ -320,6 +320,122 @@ export interface HeartbeatEvent extends BinlogEvent {
   getEventName(): 'heartbeat';
   /** Current binlog filename */
   binlogName: string;
+  /**
+   * Heartbeat position beyond 4 GiB (MariaDB only: sent in a sub-header
+   * when the u32 nextPosition cannot represent it, which is then 0)
+   */
+  position?: number | string;
+}
+
+// MariaDB GTID event (code 162) - replaces the BEGIN Query event of a
+// transaction (standalone=false) or marks a standalone group such as DDL
+export interface MariadbGtidEvent extends BinlogEvent {
+  getTypeName(): 'MariadbGtid';
+  getEventName(): 'mariadbgtid';
+  /** Sequence number within the domain (exact string beyond 2^53) */
+  seqNo: number | string;
+  /** Replication domain id */
+  domainId: number;
+  /** Originating server id (from the event header) */
+  serverId: number;
+  /** Raw flags2 byte */
+  flags2: number;
+  /** True for standalone groups (DDL, ...) with no terminating commit */
+  standalone: boolean;
+  /** True when the group can be safely rolled back */
+  transactional: boolean;
+  /** True when the group contains DDL */
+  isDdl: boolean;
+  /** XA PREPARE group; XID fields present */
+  preparedXa: boolean;
+  /** XA COMMIT/ROLLBACK group; XID fields present */
+  completedXa: boolean;
+  /** Group-commit id (same for all members of one group commit) */
+  commitId?: number | string;
+  /** XA format id, when preparedXa/completedXa */
+  xidFormatId?: number;
+  /** XA gtrid, when preparedXa/completedXa */
+  xidGtrid?: Buffer;
+  /** XA bqual, when preparedXa/completedXa */
+  xidBqual?: Buffer;
+  /** Raw flags_extra byte, when present */
+  flagsExtra?: number;
+  /** Thread id of the originating connection (MariaDB 11.5+) */
+  threadId?: number;
+  /** Full GTID string (domain-server-sequence) */
+  gtid: string;
+}
+
+export interface MariadbGtidListEntry {
+  domainId: number;
+  serverId: number;
+  seqNo: number | string;
+  /** Full GTID string (domain-server-sequence) */
+  gtid: string;
+}
+
+// MariaDB GTID list event (code 163) - at the start of every binlog file,
+// the last GTID per (domain, server) seen so far; MariaDB's analogue of
+// MySQL's Previous_gtids
+export interface MariadbGtidListEvent extends BinlogEvent {
+  getTypeName(): 'MariadbGtidList';
+  getEventName(): 'mariadbgtidlist';
+  count: number;
+  /** High 4 bits of the count word (FLAG_UNTIL_REACHED, FLAG_IGN_GTIDS) */
+  flags: number;
+  gtids: MariadbGtidListEntry[];
+}
+
+// MariaDB binlog checkpoint event (code 161) - XA-recovery marker naming
+// the oldest binlog file that may still be needed for crash recovery
+export interface BinlogCheckpointEvent extends BinlogEvent {
+  getTypeName(): 'BinlogCheckpoint';
+  getEventName(): 'binlogcheckpoint';
+  binlogName: string;
+}
+
+// MariaDB annotate rows event (code 160) - the SQL statement text for the
+// row events that follow
+export interface AnnotateRowsEvent extends BinlogEvent {
+  getTypeName(): 'AnnotateRows';
+  getEventName(): 'annotaterows';
+  statement: string;
+}
+
+// MariaDB start encryption event (code 164) - informational; the dump
+// thread decrypts server-side and the stream itself is cleartext
+export interface StartEncryptionEvent extends BinlogEvent {
+  getTypeName(): 'StartEncryption';
+  getEventName(): 'startencryption';
+  scheme: number;
+  keyVersion: number;
+  nonce: Buffer;
+}
+
+// XA prepare event (code 38, MySQL 5.7+ and MariaDB) - terminates an
+// XA-prepared event group
+export interface XaPrepareEvent extends BinlogEvent {
+  getTypeName(): 'XaPrepare';
+  getEventName(): 'xaprepare';
+  /** XA COMMIT ... ONE PHASE (commits immediately) */
+  onePhase: boolean;
+  xidFormatId: number;
+  xidGtrid: Buffer;
+  xidBqual: Buffer;
+}
+
+// MariaDB compressed statement event (code 165, log_bin_compress=ON);
+// not decodable yet, skipped with a warning
+export interface QueryCompressedEvent extends BinlogEvent {
+  getTypeName(): 'QueryCompressed';
+  getEventName(): 'querycompressed';
+}
+
+// MariaDB compressed row events (codes 166-171, log_bin_compress=ON);
+// not decodable yet, skipped with a warning
+export interface RowsCompressedEvent extends BinlogEvent {
+  getTypeName(): 'RowsCompressed';
+  getEventName(): 'rowscompressed';
 }
 
 // Unknown event type
@@ -345,6 +461,14 @@ export type AnyBinlogEvent =
   | TransactionPayloadEvent
   | PartialUpdateRowsEvent
   | HeartbeatEvent
+  | MariadbGtidEvent
+  | MariadbGtidListEvent
+  | BinlogCheckpointEvent
+  | AnnotateRowsEvent
+  | StartEncryptionEvent
+  | XaPrepareEvent
+  | QueryCompressedEvent
+  | RowsCompressedEvent
   | UnknownEvent;
 
 /** Union of all possible getTypeName() return values (e.g. 'Rotate', 'WriteRows') */

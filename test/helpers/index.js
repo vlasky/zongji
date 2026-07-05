@@ -114,6 +114,26 @@ export function requireVersion(expected, done) {
   });
 }
 
+// Calls done() only when the test server is MariaDB; used to register
+// MariaDB-specific test suites conditionally (mirrors requireVersion)
+export function requireMariaDb(done) {
+  const connObj = {...settings.connection};
+  // database doesn't exist at this time
+  delete connObj.database;
+  const conn = mysql.createConnection(connObj);
+  querySequence(conn, ['SELECT VERSION() AS version'], (err, results) => {
+    conn.destroy();
+
+    if (err) {
+      throw err;
+    }
+
+    if (results[results.length - 1][0].version.includes('MariaDB')) {
+      done();
+    }
+  });
+}
+
 let id = 100;
 export function serverId() {
   id ++;

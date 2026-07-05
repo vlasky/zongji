@@ -640,11 +640,42 @@ class ZongJi extends EventEmitter {
       this.emit('binlog', attachGtid(event));
     };
 
+    // Announce MariaDB slave capability 4 ("understands GTID events") on
+    // the binlog connection before the dump command is enqueued. Without
+    // it the server rewrites its own events for pre-GTID clients: GTID
+    // events become literal BEGIN Query events and standalone
+    // GTID/checkpoint events become dummy Query events, so no GTID
+    // information ever reaches the stream.
+    const setMariaDbCapability = (resolve, reject) => {
+      this.connection.query('SET @mariadb_slave_capability=4', (err) => {
+        if (epoch !== this._startEpoch) {
+          return resolve();
+        }
+        if (err) {
+          return reject(err);
+        }
+        resolve();
+      });
+    };
+
     // Detection must complete before the rest of the preamble because the
     // seed query below is MySQL-only
     new Promise(detectServer)
       .then(() => {
+        if (this.isMariaDb && this.options.gtidSet != null) {
+          // MariaDB resumes by GTID through @slave_connect_state, not
+          // COM_BINLOG_DUMP_GTID (which it answers with
+          // ER_UNKNOWN_COM_ERROR); reject clearly until that path exists
+          throw new Error(
+            'GTID-based resume is not yet supported against MariaDB ' +
+            'servers; start with filename/position instead');
+        }
+
         let promises = [new Promise(testChecksum)];
+
+        if (this.isMariaDb) {
+          promises.push(new Promise(setMariaDbCapability));
+        }
 
         if (this.options.startAtEnd) {
           promises.push(new Promise(findBinlogEnd));
