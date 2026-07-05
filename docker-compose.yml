@@ -31,3 +31,15 @@ services:
           - mysql84
     environment:
       MYSQL_ROOT_PASSWORD: secret
+
+  mariadb118:
+    image: mariadb:11.8
+    command: [ "--server-id=1", "--log-bin=/var/lib/mysql/mysql-bin.log", "--binlog-format=row"]
+    ports:
+      - "3308:3306"
+    networks:
+      default:
+        aliases:
+          - mariadb118
+    environment:
+      MARIADB_ROOT_PASSWORD: secret
