@@ -289,6 +289,99 @@ testDb.requireMariaDb(() => {
     });
   });
 
+  tap.test('log_bin_compress events decode transparently', test => {
+    const TEST_TABLE = 'mariadb_compress_test';
+
+    const zongji = new ZongJi(settings.connection);
+    test.teardown(() => zongji.stop());
+    test.teardown(() => new Promise(resolve => testDb.execute(
+      ['SET GLOBAL log_bin_compress = OFF',
+        'SET GLOBAL log_bin_compress_min_len = 256'], () => resolve())));
+    zongji.on('error', err => test.fail(err));
+
+    const queries = [];
+    const rowEvents = [];
+    zongji.on('binlog', evt => {
+      const type = evt.getTypeName();
+      if (type === 'Query') {
+        queries.push(evt.query);
+      }
+      if ((type === 'WriteRows' || type === 'UpdateRows' ||
+           type === 'DeleteRows') &&
+          evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+        rowEvents.push(evt);
+      }
+    });
+
+    testDb.execute([
+      'SET GLOBAL log_bin_compress = ON',
+      'SET GLOBAL log_bin_compress_min_len = 10',
+      // Other test files may have left NOBLOB behind; the assertions
+      // below expect the TEXT column in every row image
+      'SET GLOBAL binlog_row_image = FULL',
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents:
+          ['query', 'xid', 'tablemap', 'writerows', 'updaterows',
+            'deleterows'],
+      });
+
+      zongji.on('ready', () => {
+        testDb.execute([
+          `CREATE TABLE ${TEST_TABLE} (id INT PRIMARY KEY, payload TEXT)`,
+          `INSERT INTO ${TEST_TABLE} VALUES (1, REPEAT('squash-', 60))`,
+          `UPDATE ${TEST_TABLE} SET payload = REPEAT('flat-', 80)`,
+          `DELETE FROM ${TEST_TABLE}`,
+        ], insertErr => {
+          if (insertErr) {
+            return test.fail(insertErr);
+          }
+          setTimeout(() => {
+            // Prove the server really compressed the events
+            testDb.execute([
+              'SHOW BINLOG EVENTS',
+            ], (showErr, results) => {
+              if (showErr) {
+                return test.fail(showErr);
+              }
+              const eventTypes = results[results.length - 1]
+                .map(row => row.Event_type);
+              test.ok(eventTypes.some(t => /compressed/i.test(t)),
+                'server wrote compressed events ' +
+                `(saw: ${[...new Set(eventTypes)].join(', ')})`);
+
+              test.ok(queries.some(q => q.includes(
+                `CREATE TABLE ${TEST_TABLE}`)),
+                'compressed Query event decodes to its statement text');
+
+              test.equal(rowEvents.length, 3,
+                'write, update and delete row events all arrived');
+              const [w, u, d] = rowEvents;
+              test.equal(w.getTypeName(), 'WriteRows');
+              test.strictSame(w.rows[0],
+                { id: 1, payload: 'squash-'.repeat(60) },
+                'compressed insert row decodes');
+              test.equal(u.getTypeName(), 'UpdateRows');
+              test.strictSame(u.rows[0].after.payload, 'flat-'.repeat(80),
+                'compressed update row decodes');
+              test.equal(d.getTypeName(), 'DeleteRows');
+              test.strictSame(d.rows[0].payload, 'flat-'.repeat(80),
+                'compressed delete row decodes');
+              test.end();
+            });
+          }, 1000);
+        });
+      });
+    });
+  });
+
   tap.test('resume from a persisted GTID position delivers only new transactions', test => {
     const TEST_TABLE = 'mariadb_resume_test';
 

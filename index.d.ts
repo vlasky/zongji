@@ -431,20 +431,6 @@ export interface XaPrepareEvent extends BinlogEvent {
   xidBqual: Buffer;
 }
 
-// MariaDB compressed statement event (code 165, log_bin_compress=ON);
-// not decodable yet, skipped with a warning
-export interface QueryCompressedEvent extends BinlogEvent {
-  getTypeName(): 'QueryCompressed';
-  getEventName(): 'querycompressed';
-}
-
-// MariaDB compressed row events (codes 166-171, log_bin_compress=ON);
-// not decodable yet, skipped with a warning
-export interface RowsCompressedEvent extends BinlogEvent {
-  getTypeName(): 'RowsCompressed';
-  getEventName(): 'rowscompressed';
-}
-
 // Unknown event type
 export interface UnknownEvent extends BinlogEvent {
   getTypeName(): 'Unknown';
@@ -474,8 +460,6 @@ export type AnyBinlogEvent =
   | AnnotateRowsEvent
   | StartEncryptionEvent
   | XaPrepareEvent
-  | QueryCompressedEvent
-  | RowsCompressedEvent
   | UnknownEvent;
 
 /** Union of all possible getTypeName() return values (e.g. 'Rotate', 'WriteRows') */
