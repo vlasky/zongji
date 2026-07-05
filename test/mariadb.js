@@ -212,7 +212,7 @@ testDb.requireMariaDb(() => {
   });
 
   tap.test('empty GTID position replays the full available history', test => {
-    const TEST_TABLE = 'mariadb_resume_test'; // written by the test above
+    const TEST_TABLE = 'mariadb_empty_pos_test';
 
     const zongji = new ZongJi(settings.connection);
     test.teardown(() => zongji.stop());
@@ -226,18 +226,31 @@ testDb.requireMariaDb(() => {
       }
     });
 
-    zongji.start({
-      gtidSet: '',
-      serverId: testDb.serverId(),
-      includeEvents: ['tablemap', 'writerows'],
-    });
+    // Self-contained history: written before the dump starts, so an
+    // empty position (= from the oldest binlog) must replay it
+    testDb.execute([
+      `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+      `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED)`,
+      `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
+      `INSERT INTO ${TEST_TABLE} (col) VALUES (2)`,
+    ], err => {
+      if (err) {
+        return test.fail(err);
+      }
 
-    zongji.on('ready', () => {
-      setTimeout(() => {
-        test.strictSame(rows, [1, 2, 3, 4],
-          'the whole binlog history streams from the oldest file');
-        test.end();
-      }, 1500);
+      zongji.start({
+        gtidSet: '',
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+
+      zongji.on('ready', () => {
+        setTimeout(() => {
+          test.strictSame(rows, [1, 2],
+            'history written before the dump streams from the oldest file');
+          test.end();
+        }, 1500);
+      });
     });
   });
 
