@@ -99,6 +99,79 @@ tap.test('encode layout details', test => {
   test.end();
 });
 
+tap.test('tagged GTIDs (MySQL 8.3+)', test => {
+  test.test('parse/toString round-trip, ordering and folding', test => {
+    const tagged = `${UUID_A}:1-5:tag_a:1:tag_b:1`;
+    test.equal(GtidSet.parse(tagged).toString(), tagged, 'round-trips');
+    test.equal(GtidSet.parse(`${UUID_A}:tag_b:1:tag_a:1-2`).toString(),
+      `${UUID_A}:tag_a:1-2:tag_b:1`,
+      'tags sort within the uuid block; untagged-only block needs none');
+    test.equal(GtidSet.parse(`${UUID_A}:tag_a:3:1-2`).toString(),
+      `${UUID_A}:tag_a:1-3`,
+      'a tag governs all following intervals until the next tag');
+    test.equal(GtidSet.parse(`${UUID_A}:TAG_A:1`).toString(),
+      `${UUID_A}:tag_a:1`, 'tags fold to lowercase');
+    test.end();
+  });
+
+  test.test('add accepts uuid:tag:gno', test => {
+    const set = GtidSet.parse(`${UUID_A}:1-5`);
+    set.add(`${UUID_A}:tag_a:1`);
+    set.add(`${UUID_A}:tag_a:2`);
+    test.equal(set.toString(), `${UUID_A}:1-5:tag_a:1-2`,
+      'tagged intervals coalesce per (uuid, tag)');
+    set.add(`${UUID_A}:6`);
+    test.equal(set.toString(), `${UUID_A}:1-6:tag_a:1-2`,
+      'tagged and untagged sources stay separate');
+    test.throws(() => set.add(`${UUID_A}:not a tag!:1`), 'invalid tag');
+    test.throws(() => set.add(`${UUID_A}:tag:extra:1`), 'too many parts');
+    test.throws(() => GtidSet.parse(`${UUID_A}:tag_a`),
+      'tag without intervals');
+    test.end();
+  });
+
+  test.test('wire encoding matches a server-written tagged set', test => {
+    // PREVIOUS_GTIDS body written by MySQL 8.4.8 itself (captured from
+    // a live binlog) for this exact set: the reference for
+    // Gtid_set::encode's tagged format
+    const uuid = 'fb5b7041-7754-11f1-a067-e69d25af13b4';
+    const serverBytes =
+      '0103000000000001' +                        // (1<<56)|(3<<8)|1
+      'fb5b7041775411f1a067e69d25af13b4' + '00' + // untagged entry
+      '010000000000000001000000000000000600000000000000' +
+      'fb5b7041775411f1a067e69d25af13b4' + '0a7461675f61' + // 'tag_a'
+      '010000000000000001000000000000000200000000000000' +
+      'fb5b7041775411f1a067e69d25af13b4' + '0a7461675f62' + // 'tag_b'
+      '010000000000000001000000000000000200000000000000';
+    const set = GtidSet.parse(`${uuid}:1-5:tag_a:1:tag_b:1`);
+    test.equal(set.encode().toString('hex'), serverBytes,
+      'byte-identical to the server encoding');
+
+    // Untagged sets must stay in the classic format every server accepts
+    const classic = GtidSet.parse(`${uuid}:1-5`).encode();
+    test.equal(classic.readBigUInt64LE(0), 1n,
+      'untagged first u64 is a plain sid count (format byte 0)');
+    test.end();
+  });
+
+  test.test('tagged encoding round-trips through PreviousGtids', test => {
+    const text = `${UUID_B}:1-27,${UUID_A}:1-5:tag_a:1:tag_b:7-9`;
+    const encoded = GtidSet.parse(text).encode();
+    const parser = new Parser({
+      buffer: encoded, offset: 0, end: encoded.length,
+    });
+    const event = new PreviousGtids(parser,
+      { timestamp: 0, nextPosition: 0, size: encoded.length },
+      { useChecksum: false });
+    test.equal(event.gtidSet, text, 'PreviousGtids decodes our encoding');
+    test.equal(GtidSet.parse(event.gtidSet).toString(), text,
+      'and the text parses back');
+    test.end();
+  });
+
+  test.end();
+});
+
 tap.test('MariadbGtidPosition', test => {
   test.test('parse round-trips', test => {
     for (const text of ['', '0-1-5', '0-1-5,1-2-10', '2-4294967295-9007199254740991']) {

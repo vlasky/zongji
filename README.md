@@ -157,7 +157,7 @@ Option Name | Type | Description
 `startAtEnd` | `boolean` | Pass `true` to only emit binlog events that occur after ZongJi's instantiation. Must be used in `start()` method for effect.<br>**Default:** `false`
 `filename` | `string` | Begin reading events from this binlog file. If specified together with `position`, will take precedence over `startAtEnd`.
 `position` | `integer` | Begin reading events from this position. Must be included with `filename`.
-`gtidSet` | `string` | Resume from executed GTIDs (e.g. a persisted `zongji.gtidSet`): a MySQL GTID set (`'uuid:1-27'`) or a MariaDB GTID position (`'0-1-1234'`), matching the server flavour. The server locates the correct binlog file itself and skips transactions already processed, so a checkpoint remains valid across failover to another server in the same replication topology. Requires `gtid_mode=ON` on MySQL; always available on MariaDB. Pass `''` to stream the entire available history. Takes precedence over `filename`/`position` and `startAtEnd`.
+`gtidSet` | `string` | Resume from executed GTIDs (e.g. a persisted `zongji.gtidSet`): a MySQL GTID set (`'uuid:1-27'`; tagged transactions print as `'uuid:1-27:tag_a:1'` on MySQL 8.3+) or a MariaDB GTID position (`'0-1-1234'`), matching the server flavour. The server locates the correct binlog file itself and skips transactions already processed, so a checkpoint remains valid across failover to another server in the same replication topology. Requires `gtid_mode=ON` on MySQL; always available on MariaDB. Pass `''` to stream the entire available history. Takes precedence over `filename`/`position` and `startAtEnd`.
 `requestAnnotateRows` | `boolean` | MariaDB only: ask the server to send `annotaterows` events (the SQL statement text preceding each row operation's events). Off by default; note the statement text may contain sensitive literals that the row images alone would not expose. Ignored on MySQL.<br>**Default:** `false`
 `includeEvents` | `[string]` | Array of event names to include<br>**Example:** `['writerows', 'updaterows', 'deleterows']`
 `excludeEvents` | `[string]` | Array of event names to exclude<br>**Example:** `['rotate', 'tablemap']`
@@ -179,7 +179,7 @@ Event name  | Description
 `rotate`    | [New Binlog file](https://dev.mysql.com/doc/internals/en/rotate-event.html). The `filename` and `position` resume properties stay updated across rotations whether or not this event is included; include it only if you want to observe rotations yourself.
 `format`    | [Format Description](https://dev.mysql.com/doc/internals/en/format-description-event.html)
 `xid`       | [Transaction ID](https://dev.mysql.com/doc/internals/en/xid-event.html)
-`gtid`      | MySQL GTID event with `gtid`, `sid`, `gno` properties
+`gtid`      | MySQL GTID event with `gtid`, `sid`, `gno` properties. Tagged GTIDs (MySQL 8.3+, `GTID_NEXT='AUTOMATIC:tag'`) arrive as the same event with `tag` set and `gtid` in `uuid:tag:gno` form
 `anonymousgtid` | MySQL anonymous GTID event (same shape as `gtid`)
 `previousgtids` | MySQL Previous GTIDs event with `gtidSet` and `sids`
 `mariadbgtid` | MariaDB GTID event with `gtid` (`'domain-server-sequence'`), `domainId`, `serverId`, `seqNo` and flags (`standalone`, `isDdl`, XA states). Replaces the `BEGIN` query event of a transaction.
@@ -209,7 +209,7 @@ zongji.start({ gtidSet: savedGtidSet, serverId: 5 });
 
 Unlike file+position checkpoints, a GTID checkpoint is valid on any server in the same replication topology, which makes resuming across a failover possible. The server performs the skipping itself, so already-processed transactions are not resent.
 
-`zongji.gtidSet` is available when `start()` was given a `gtidSet`, with `startAtEnd` (seeded from the server's `gtid_executed` on MySQL, `gtid_current_pos` on MariaDB), or when reading from the start of a binlog file (seeded from its Previous_gtids or MariaDB GTID list event). It is `undefined` when resuming from an arbitrary mid-file file+position checkpoint, where no exact value can be known.
+`zongji.gtidSet` is available when `start()` was given a `gtidSet`, with `startAtEnd` (seeded from the server's `gtid_executed` on MySQL, `gtid_current_pos` on MariaDB), or when reading from the start of a binlog file (seeded from its Previous_gtids or MariaDB GTID list event). It is `undefined` when resuming from an arbitrary mid-file file+position checkpoint, where no exact value can be known. Tagged GTIDs (MySQL 8.3+) are fully supported: tagged transactions appear in the set as `uuid:…:tag:intervals` sections, and a checkpoint containing tags resumes correctly (its wire encoding is only understood by MySQL 8.3+ servers).
 
 On MySQL, GTID resume requires `gtid_mode=ON` and a set is a per-source-UUID collection of intervals. On MariaDB, GTIDs are always on and a position is a single watermark per replication domain (`domain-server-sequence`): resuming replays each listed domain after its watermark, and domains not listed replay from the beginning. If the server has purged binlogs your checkpoint still needs, `start()` emits an error (code 1236) naming the problem; MariaDB additionally reports a checkpoint ahead of its binlog as error 1945/1955. A fresh snapshot is then required.
 

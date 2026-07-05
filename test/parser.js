@@ -439,6 +439,69 @@ tap.test('truncated MariaDB events throw instead of consuming the CRC',
     test.end();
   });
 
+// Tagged GTIDs (MySQL 8.3+): event bodies captured byte-for-byte from a
+// live MySQL 8.4.8 binlog. The GTID_TAGGED_LOG_EVENT uses the
+// mysql::serialization varint format (including the UUID as 16
+// individual varints); PREVIOUS_GTIDS switches to the tagged set
+// encoding permanently once the server has ever executed a tagged GTID,
+// even after RESET BINARY LOGS AND GTIDS.
+tap.test('tagged GTID specimens decode', test => {
+  const { Gtid, PreviousGtids } = eventsModule;
+  const zongji = { useChecksum: true };
+  const decode = (Cls, hex, opts = {}) => {
+    const body = Buffer.from(hex, 'hex');
+    const parser = new Parser();
+    parser.append(body);
+    return new Cls(parser,
+      { timestamp: 0, nextPosition: 0, size: body.length, ...opts },
+      zongji);
+  };
+
+  // SET GTID_NEXT='AUTOMATIC:mytag'; INSERT ... (CRC32 included)
+  const TAGGED_GTID_BODY =
+    '027800000002ed03b6e082eea822c5038102ce990375024abd0226d10204040' +
+    '60a6d7974616708b9020ac1020c7f9204f6a0dd550610bd0412c3d009965f66d5';
+  const gtid = decode(Gtid, TAGGED_GTID_BODY, { eventType: 42 });
+  test.equal(gtid.sid, 'fb5b7041-7754-11f1-a067-e69d25af13b4',
+    'UUID recovered from 16 individual varints');
+  test.equal(gtid.tag, 'mytag');
+  test.equal(gtid.gno, 1, 'GNO from a signed varint');
+  test.equal(gtid.flags, 0);
+  test.equal(gtid.gtid, 'fb5b7041-7754-11f1-a067-e69d25af13b4:mytag:1',
+    'canonical uuid:tag:gno text');
+
+  // A truncated body must throw instead of reading past the event
+  test.throws(() => decode(Gtid,
+    TAGGED_GTID_BODY.slice(0, 20), { eventType: 42 }),
+  'truncated tagged GTID event throws');
+
+  // Previous_gtids for 'uuid:1-5:tag_a:1:tag_b:1'
+  const prev = decode(PreviousGtids,
+    '0103000000000001fb5b7041775411f1a067e69d25af13b4000100000000000' +
+    '0000100000000000000060000000000000' +
+    '0fb5b7041775411f1a067e69d25af13b40a7461675f610100000000000000010' +
+    '00000000000000200000000000000' +
+    'fb5b7041775411f1a067e69d25af13b40a7461675f62010000000000000001000' +
+    '000000000000200000000000000ed1bcc7c');
+  test.equal(prev.gtidSet,
+    'fb5b7041-7754-11f1-a067-e69d25af13b4:1-5:tag_a:1:tag_b:1',
+    'entries sharing a uuid merge into one printed block');
+  test.strictSame(prev.sids[1],
+    { sid: 'fb5b7041-7754-11f1-a067-e69d25af13b4', tag: 'tag_a',
+      intervals: [{ start: 1, end: 2 }] });
+
+  // The empty tagged-format set written after RESET on such a server:
+  // this exact event crashed the parser before tagged support existed
+  const empty = decode(PreviousGtids, '0100000000000001f2a41327');
+  test.equal(empty.gtidSet, '');
+  test.strictSame(empty.sids, []);
+
+  // Unknown format bytes must be rejected, not misread as sid counts
+  test.throws(() => decode(PreviousGtids, '0100000000000002deadbeef'),
+    /Unknown GTID set encoding format/);
+  test.end();
+});
+
 // MariaDB 11.8 capture: native GTID events, annotate events, logical
 // types riding on binary codes, COMPRESSED columns, a compressed row
 // EVENT (log_bin_compress) and 5.3 hires temporals - all decoded offline

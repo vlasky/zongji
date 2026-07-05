@@ -22,6 +22,9 @@ tap.test('Initialise testing db', async test => {
 const IS_MARIADB = await testDb.isMariaDb();
 const MYSQL_ONLY =
   IS_MARIADB && 'MySQL gtid_mode only; see test/mariadb.js';
+const NO_TAGGED_GTIDS = IS_MARIADB ? MYSQL_ONLY :
+  (!(await testDb.serverVersionAtLeast('8.3.0')) &&
+    'tagged GTIDs need MySQL 8.3+');
 
 tap.test('resume from a persisted gtidSet delivers only new transactions',
   { skip: MYSQL_ONLY },
@@ -289,4 +292,135 @@ testDb.requireMySql(() => {
       gtidSet: '0-1-1234',
     });
   });
+});
+
+// Tagged GTIDs (MySQL 8.3+, GTID_NEXT='AUTOMATIC:tag'): transactions
+// arrive as GTID_TAGGED_LOG_EVENT (code 42), gtid_executed grows a
+// ':tag:intervals' section, and - permanently, surviving RESET - the
+// server switches Previous_gtids to the tagged set encoding. All of
+// zongji's GTID surfaces must keep working: event decode, event.gtid
+// attribution, gtidSet tracking/seeding, and resume via
+// COM_BINLOG_DUMP_GTID with a tagged payload.
+tap.test('tagged GTIDs decode, seed and resume',
+  { skip: NO_TAGGED_GTIDS }, test => {
+  const TAGGED_TABLE = 'gtid_tagged_test';
+
+  const first = new ZongJi(settings.connection);
+  test.teardown(() => first.stop());
+  first.on('error', err => test.fail(err));
+
+  const gtids = [];
+  const rowGtids = [];
+  first.on('binlog', event => {
+    if (event.getTypeName() === 'Gtid') {
+      gtids.push(event);
+    } else if (event.getTypeName() === 'WriteRows') {
+      rowGtids.push(event.gtid);
+    }
+  });
+
+  testDb.ensureGtidMode(() => testDb.execute([
+    `DROP TABLE IF EXISTS ${TAGGED_TABLE}`,
+    `CREATE TABLE ${TAGGED_TABLE} (col INT UNSIGNED)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    first.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['gtid', 'tablemap', 'writerows'],
+    });
+
+    first.on('ready', () => {
+      testDb.execute([
+        "SET SESSION gtid_next = 'AUTOMATIC:ztag'",
+        `INSERT INTO ${TAGGED_TABLE} (col) VALUES (1)`,
+        "SET SESSION gtid_next = 'AUTOMATIC'",
+        `INSERT INTO ${TAGGED_TABLE} (col) VALUES (2)`,
+      ], insertErr => {
+        if (insertErr) {
+          return test.fail(insertErr);
+        }
+        setTimeout(() => {
+          test.equal(gtids.length, 2);
+          const [tagged, untagged] = gtids;
+          test.equal(tagged.tag, 'ztag',
+            'GTID_TAGGED_LOG_EVENT decodes with its tag');
+          test.match(tagged.gtid, /^[0-9a-f-]{36}:ztag:\d+$/,
+            'tagged gtid text is uuid:tag:gno');
+          test.equal(untagged.tag, undefined,
+            'classic GTID events are unchanged');
+          test.equal(rowGtids[0], tagged.gtid,
+            'row events carry the tagged transaction gtid');
+          test.equal(rowGtids[1], untagged.gtid);
+          test.match(first.gtidSet, /:ztag:/,
+            'the executed set tracks the tagged transaction');
+
+          const checkpoint = first.gtidSet;
+          first.stop();
+          // One more of each flavour while nothing listens
+          testDb.execute([
+            "SET SESSION gtid_next = 'AUTOMATIC:ztag'",
+            `INSERT INTO ${TAGGED_TABLE} (col) VALUES (3)`,
+            "SET SESSION gtid_next = 'AUTOMATIC'",
+            `INSERT INTO ${TAGGED_TABLE} (col) VALUES (4)`,
+          ], gapErr => {
+            if (gapErr) {
+              return test.fail(gapErr);
+            }
+            resumeAndVerify(checkpoint);
+          });
+        }, 1000);
+      });
+    });
+  }));
+
+  // Resuming with a tagged checkpoint sends the tagged
+  // COM_BINLOG_DUMP_GTID payload; the server must skip transactions
+  // 1 and 2 itself and deliver only 3 and 4
+  const resumeAndVerify = (checkpoint) => {
+    const second = new ZongJi(settings.connection);
+    test.teardown(() => second.stop());
+    second.on('error', err => test.fail(err));
+
+    const resumedRows = [];
+    second.on('binlog', event => {
+      if (event.getTypeName() === 'WriteRows') {
+        resumedRows.push(event.rows[0].col);
+      }
+    });
+
+    second.start({
+      gtidSet: checkpoint,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows'],
+    });
+
+    second.on('ready', () => {
+      setTimeout(() => {
+        test.strictSame(resumedRows, [3, 4],
+          'the tagged checkpoint resumes past both flavours');
+        test.match(second.gtidSet, /:ztag:/,
+          'the resumed set keeps the tagged transactions');
+
+        // A fresh startAtEnd instance must seed from a gtid_executed
+        // that now contains tags (this crashed before tagged support)
+        const third = new ZongJi(settings.connection);
+        test.teardown(() => third.stop());
+        third.on('error', err => test.fail(err));
+        third.start({
+          startAtEnd: true,
+          serverId: testDb.serverId(),
+          includeEvents: ['tablemap', 'writerows'],
+        });
+        third.on('ready', () => {
+          test.match(third.gtidSet, /:ztag:/,
+            'startAtEnd seeds from a tagged gtid_executed');
+          test.end();
+        });
+      }, 1500);
+    });
+  };
 });

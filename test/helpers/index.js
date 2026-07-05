@@ -156,6 +156,27 @@ export function isMariaDb() {
   return new Promise(resolve => checkFlavour(resolve));
 }
 
+// Promise form of requireVersion, for the same { skip } pattern
+export function serverVersionAtLeast(expected) {
+  return new Promise(resolve => {
+    const connObj = { ...settings.connection };
+    // database doesn't exist at this time
+    delete connObj.database;
+    const conn = mysql.createConnection(connObj);
+    querySequence(conn, ['SELECT VERSION() AS version'], (err, results) => {
+      conn.destroy();
+      if (err) {
+        throw err;
+      }
+      const ver = results[results.length - 1][0]
+        .version.split('-')[0]
+        .split('.')
+        .map(part => parseInt(part, 10));
+      resolve(checkVersion(expected, ver));
+    });
+  });
+}
+
 let id = 100;
 export function serverId() {
   id ++;

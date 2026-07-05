@@ -13,14 +13,16 @@ export interface ZongJiOptions {
   position?: number;
   /**
    * Executed GTIDs to resume from (e.g. a persisted zongji.gtidSet): a
-   * MySQL GTID set ('uuid:1-5,...') or a MariaDB GTID position
+   * MySQL GTID set ('uuid:1-5,...', tagged intervals as
+   * 'uuid:1-5:tag_a:1,...' on MySQL 8.3+) or a MariaDB GTID position
    * ('0-1-1234,...'), matching the server flavour. The server locates
    * the right binlog file and skips transactions already processed
    * (MySQL: COM_BINLOG_DUMP_GTID, requires gtid_mode=ON; MariaDB:
    * @slave_connect_state, always available), so this works across
    * failover to another server in the same topology. '' streams the
    * server's entire available history. Takes precedence over
-   * filename/position.
+   * filename/position. A set containing tags uses a wire encoding only
+   * MySQL 8.3+ understands; older servers reject it.
    */
   gtidSet?: string;
   /** If true, use non-blocking mode */
@@ -123,7 +125,13 @@ export interface GtidEvent extends BinlogEvent {
   sid: string;
   /** Group number (exact string beyond Number.MAX_SAFE_INTEGER) */
   gno: number | string;
-  /** Full GTID string (sid:gno) */
+  /**
+   * GTID tag (MySQL 8.3+, set via GTID_NEXT='AUTOMATIC:tag'); '' for
+   * untagged transactions. Only present on events that arrived as
+   * GTID_TAGGED_LOG_EVENT; classic GTID events leave it undefined.
+   */
+  tag?: string;
+  /** Full GTID string (sid:gno, or sid:tag:gno when tagged) */
   gtid: string;
 }
 
@@ -149,6 +157,12 @@ export interface GtidInterval {
 
 export interface GtidSidEntry {
   sid: string;
+  /**
+   * GTID tag ('' for the untagged entry). Only present when the server
+   * wrote the tagged set encoding (MySQL 8.3+ after any tagged GTID);
+   * each (sid, tag) pair is its own entry, repeating the sid.
+   */
+  tag?: string;
   intervals: GtidInterval[];
 }
 
