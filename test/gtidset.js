@@ -154,6 +154,10 @@ tap.test('tagged GTIDs (MySQL 8.3+)', test => {
     test.throws(() => set.add(`${UUID_A}:tag:extra:1`), 'too many parts');
     test.throws(() => GtidSet.parse(`${UUID_A}:tag_a`),
       'tag without intervals');
+    test.throws(() => GtidSet.parse(`${UUID_A}:1:tag_a`),
+      'trailing tag without intervals');
+    test.throws(() => GtidSet.parse(`${UUID_A}:tag_a:tag_b:1`),
+      'consecutive tags');
     test.end();
   });
 
