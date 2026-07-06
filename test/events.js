@@ -1027,6 +1027,102 @@ tap.test('event.gtid detaches after XA PREPARE',
   }));
 });
 
+// The resume position must never point inside a transaction's
+// TableMap-to-commit span. A multi-table statement writes ALL its
+// TableMap events before any row event, so a position persisted while
+// the first table's rows were being processed used to land past the
+// later TableMaps; a resumed instance had no metadata for those table
+// ids and silently dropped their rows. The position now freezes at the
+// first TableMap and jumps to the commit marker's end position, so a
+// resume replays whole transactions (at-least-once). Foreign-key
+// cascades write the same all-TableMaps-first shape.
+tap.test('resume pair persisted mid-transaction replays the whole transaction',
+  test => {
+  const TABLE_A = 'multi_pos_a';
+  const TABLE_B = 'multi_pos_b';
+
+  const first = new ZongJi(settings.connection);
+  test.teardown(() => first.stop());
+  first.on('error', err => test.fail(err));
+
+  let snapshot;
+  let xid;
+  first.on('binlog', evt => {
+    if (evt.getTypeName() === 'UpdateRows' && !snapshot) {
+      // What a consumer that persists the resume pair per event would
+      // have on disk if it crashed while handling the first table's rows
+      snapshot = {
+        filename: first.options.filename,
+        position: first.options.position,
+      };
+    } else if (evt.getTypeName() === 'Xid') {
+      xid = evt;
+    }
+  });
+
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TABLE_A}`,
+    `DROP TABLE IF EXISTS ${TABLE_B}`,
+    `CREATE TABLE ${TABLE_A} (id INT PRIMARY KEY, val INT)`,
+    `CREATE TABLE ${TABLE_B} (id INT PRIMARY KEY, val INT)`,
+    `INSERT INTO ${TABLE_A} VALUES (1, 0)`,
+    `INSERT INTO ${TABLE_B} VALUES (1, 0)`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+    first.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'updaterows', 'xid'],
+    });
+
+    first.on('ready', () => {
+      testDb.execute([
+        `UPDATE ${TABLE_A} a, ${TABLE_B} b
+          SET a.val = 10, b.val = 20 WHERE a.id = b.id`,
+      ], updateErr => {
+        if (updateErr) {
+          return test.fail(updateErr);
+        }
+        setTimeout(() => {
+          test.ok(snapshot, 'saw the first UpdateRows');
+          test.ok(xid, 'saw the commit');
+          test.equal(first.options.position, xid.nextPosition,
+            'after the commit the position is the transaction boundary');
+          first.stop();
+
+          // Resume from the mid-transaction snapshot: both tables' row
+          // events must arrive (the snapshot must predate the first
+          // TableMap, not sit between the two tables' row events)
+          const second = new ZongJi(settings.connection);
+          test.teardown(() => second.stop());
+          second.on('error', resumeErr => test.fail(resumeErr));
+          const resumedTables = [];
+          second.on('binlog', evt => {
+            if (evt.getTypeName() === 'UpdateRows') {
+              resumedTables.push(evt.tableMap[evt.tableId].tableName);
+            }
+          });
+          second.start({
+            filename: snapshot.filename,
+            position: snapshot.position,
+            serverId: testDb.serverId(),
+            includeEvents: ['tablemap', 'updaterows'],
+          });
+          second.on('ready', () => {
+            setTimeout(() => {
+              test.strictSame(resumedTables.sort(), [TABLE_A, TABLE_B],
+                'no table\'s rows are dropped on resume');
+              test.end();
+            }, 1500);
+          });
+        }, 1000);
+      });
+    });
+  });
+});
+
 // Regression: filters passed to a start() issued while a previous start()
 // is still initialising must be applied, not silently dropped. Consumers
 // (e.g. mysql-live-select) register tables between start() and 'ready'

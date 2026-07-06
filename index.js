@@ -40,6 +40,7 @@ class ZongJi extends EventEmitter {
     this._currentGtid = undefined;
     this._executedGtids = null;
     this._pendingGtid = undefined;
+    this._positionFrozen = false;
     this._seedGtidsFromStream = false;
     this._startFromGtids = false;
     this.ready = false;
@@ -477,9 +478,11 @@ class ZongJi extends EventEmitter {
     const epoch = this._startEpoch;
 
     // A resumed stream must not attribute early events to a GTID seen
-    // before the restart
+    // before the restart, nor inherit a position freeze from a
+    // transaction the previous stream was in the middle of
     this._currentGtid = undefined;
     this._pendingGtid = undefined;
+    this._positionFrozen = false;
 
     // Executed-GTID-set tracking (drives the zongji.gtidSet checkpoint).
     // Exact seeds: an explicit start set, the server's gtid_executed for
@@ -673,23 +676,23 @@ class ZongJi extends EventEmitter {
       // the header nextPosition refers to the OLD file (0 for the
       // artificial rotate at dump start), and persisting (new filename,
       // old-file offset) would corrupt the resume point.
-      // Never advance the resume position past a TableMap: a consumer
-      // persisting options.position could otherwise resume in the gap
-      // between a TableMap and its row events, and with no cached table
-      // metadata those rows would be silently dropped. Holding position
-      // back means the TableMap is replayed before its rows on resume;
-      // rows already seen may be re-emitted (at-least-once), which is
-      // recoverable where dropping is not. A narrower window remains for
-      // multi-table statements (all TableMaps precede all row events, so
-      // emitting the first table's rows advances past the later
-      // TableMaps); the complete fix is advancing only at transaction
-      // boundaries, tracked pre-filter.
+      // Never advance the resume position into a transaction's
+      // TableMap-to-commit span: a consumer persisting options.position
+      // could otherwise resume between a TableMap and row events that
+      // depend on it, and with no cached table metadata those rows would
+      // be silently dropped (a multi-table statement writes all its
+      // TableMaps before any row event, so even a position after one
+      // table's rows is inside the danger zone). The packet layer
+      // freezes the position at the first TableMap and unfreezes it at
+      // the commit marker; on resume the whole transaction is replayed,
+      // so rows already seen may be re-emitted (at-least-once), which is
+      // recoverable where dropping is not.
       // MariaDB writes end_log_pos=0 on every event inside a transaction
       // (TableMap, row events); only commits and standalone events carry a
       // real position. Adopting a zero would corrupt the resume point.
       const typeName = event.getTypeName();
       if (typeName !== 'TableMap' && typeName !== 'Rotate' &&
-          event.nextPosition > 0) {
+          !this._positionFrozen && event.nextPosition > 0) {
         this.options.position = event.nextPosition;
       }
       this.emit('binlog', attachGtid(event));
