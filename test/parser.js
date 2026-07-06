@@ -357,6 +357,37 @@ tap.test('corrupt gtid packet surfaces an error even when filtered', test => {
   test.end();
 });
 
+tap.test('resume position freeze survives a corrupt boundary event', test => {
+  const zongji = new ZongJi({});
+  zongji.useChecksum = FIXTURE.useChecksum;
+  zongji.connection = { config: { ...FIXTURE.connectionConfig } };
+  zongji._filters({ includeEvents: ['tablemap', 'writerows'] });
+
+  const gtidIndex = FIXTURE.eventSummary.indexOf('Gtid');
+  const full = Buffer.from(FIXTURE.packets[gtidIndex], 'hex');
+
+  const BinlogClass = initBinlogClass(zongji);
+  const command = new BinlogClass(function() {});
+  const asPacket = (buffer) => ({
+    buffer, offset: 0, end: buffer.length,
+    isEOF: () => false, isError: () => false,
+  });
+
+  // Mid-transaction (position frozen at a TableMap), a GTID event would
+  // prove the transaction over - but only if it actually parses. A
+  // frozen position is recoverable (redelivery); unfreezing on garbage
+  // could advance the position past unreplayed TableMaps
+  zongji._positionFrozen = true;
+  command.binlogData(asPacket(full.subarray(0, 25)), zongji.connection);
+  test.equal(zongji._positionFrozen, true,
+    'a corrupt GTID event does not end the freeze');
+
+  command.binlogData(asPacket(full), zongji.connection);
+  test.equal(zongji._positionFrozen, false,
+    'a parsed GTID event does');
+  test.end();
+});
+
 tap.test('truncated packet surfaces a parse error via getEvent', test => {
   const zongji = new ZongJi({});
   zongji.useChecksum = FIXTURE.useChecksum;
