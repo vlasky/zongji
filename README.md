@@ -224,6 +224,18 @@ if (!snapshot.contains(event.gtid)) {
 }
 ```
 
+Its MariaDB counterpart `MariadbGtidPosition` is exported too, with a `covers()` method so consumers do not have to compare sequence numbers themselves (`seqNo` values above `Number.MAX_SAFE_INTEGER` arrive as exact strings, and comparing them as Numbers silently rounds; internally `GtidSet` is exact over MySQL's full GNO range of 1 to 2^63-1 and `MariadbGtidPosition` over MariaDB's full u64 sequence range):
+
+```javascript
+import { MariadbGtidPosition } from '@vlasky/zongji';
+
+const snapshot = MariadbGtidPosition.parse(savedGtidPos); // or @@gtid_binlog_pos
+snapshot.covers(event.gtid);                      // at or before the position?
+snapshot.covers(event.gtid, { inclusive: false }); // strictly before it?
+```
+
+The default (inclusive) form answers "was this transaction's commit at or before the position?", which is what snapshot-barrier checks want: a recorded position covers the whole of its final transaction. Redelivery watermarks must pass `{ inclusive: false }`: all events of a transaction share one GTID, so an inclusive check would treat the watermark transaction's own replayed events as already seen and drop every one after the first. A server id different from the position's entry for that domain reports **not covered**, even for a lower sequence number: after a failover, sequence numbers can regress under the new server id, so ordering against another server's watermark is not meaningful, and for at-least-once consumers an idempotent redelivery is recoverable where a skip is not. A domain the position does not list is likewise not covered.
+
 `zongji.gtidSet` is available when `start()` was given a `gtidSet`, with `startAtEnd` (seeded from the server's `gtid_executed` on MySQL, `gtid_current_pos` on MariaDB), or when reading from the start of a binlog file (seeded from its Previous_gtids or MariaDB GTID list event). It is `undefined` when resuming from an arbitrary mid-file file+position checkpoint, where no exact value can be known. Tagged GTIDs (MySQL 8.3+) are fully supported: tagged transactions appear in the set as `uuid:…:tag:intervals` sections, and a checkpoint containing tags resumes correctly (its wire encoding is only understood by MySQL 8.3+ servers).
 
 On MySQL, GTID resume requires `gtid_mode=ON` and a set is a per-source-UUID collection of intervals. On MariaDB, GTIDs are always on and a position is a single watermark per replication domain (`domain-server-sequence`): resuming replays each listed domain after its watermark, and domains not listed replay from the beginning. If the server has purged binlogs your checkpoint still needs, `start()` emits an error (code 1236) naming the problem; MariaDB additionally reports a checkpoint ahead of its binlog as error 1945/1955. A fresh snapshot is then required.

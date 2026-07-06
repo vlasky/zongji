@@ -151,8 +151,16 @@ export interface AnonymousGtidEvent extends BinlogEvent {
 
 // Previous GTIDs event
 export interface GtidInterval {
-  start: number;
-  end: number;
+  /**
+   * Interval start GNO, inclusive (exact string above
+   * Number.MAX_SAFE_INTEGER)
+   */
+  start: number | string;
+  /**
+   * Interval end GNO, exclusive as on the wire (exact string above
+   * Number.MAX_SAFE_INTEGER)
+   */
+  end: number | string;
 }
 
 export interface GtidSidEntry {
@@ -360,7 +368,12 @@ export interface HeartbeatEvent extends BinlogEvent {
 export interface MariadbGtidEvent extends BinlogEvent {
   getTypeName(): 'MariadbGtid';
   getEventName(): 'mariadbgtid';
-  /** Sequence number within the domain (exact string beyond 2^53) */
+  /**
+   * Sequence number within the domain. Arrives as an exact string above
+   * Number.MAX_SAFE_INTEGER, so never compare it numerically: use
+   * event.gtid with MariadbGtidPosition.covers() (or GtidSet on MySQL)
+   * instead.
+   */
   seqNo: number | string;
   /** Replication domain id */
   domainId: number;
@@ -401,6 +414,11 @@ export interface MariadbGtidEvent extends BinlogEvent {
 export interface MariadbGtidListEntry {
   domainId: number;
   serverId: number;
+  /**
+   * Sequence number within the domain. Arrives as an exact string above
+   * Number.MAX_SAFE_INTEGER, so never compare it numerically: use the
+   * gtid string with MariadbGtidPosition.covers() instead.
+   */
   seqNo: number | string;
   /** Full GTID string (domain-server-sequence) */
   gtid: string;
@@ -669,5 +687,60 @@ export class GtidSet {
   contains(gtid: string | null | undefined): boolean;
   isEmpty(): boolean;
   /** Canonical text form (sorted; tagged intervals after untagged) */
+  toString(): string;
+}
+
+/**
+ * A MariaDB GTID position (the model behind zongji.gtidSet on MariaDB):
+ * the last transaction processed per replication domain. String form
+ * matches @@gtid_binlog_pos / @@gtid_current_pos, e.g. '0-1-1234,1-3-45'.
+ * Exported so consumers can parse persisted positions and test coverage
+ * via covers() instead of hand-rolling seqNo comparators (which silently
+ * round above Number.MAX_SAFE_INTEGER when done with Number; internally
+ * this class is exact over the full u64 sequence range).
+ */
+export class MariadbGtidPosition {
+  /**
+   * Parses a GTID position string ('' gives an empty position). Rejects
+   * two entries for one domain, as the server would. Throws on malformed
+   * input.
+   */
+  static parse(text: string): MariadbGtidPosition;
+  /**
+   * Builds the position implied by a MariadbGtidList event's gtids
+   * array: the last entry per domain wins
+   */
+  static fromGtidList(entries: Array<{
+    domainId: number;
+    serverId: number;
+    seqNo: number | string;
+  }>): MariadbGtidPosition;
+  /**
+   * Records a transaction as the last processed in its domain
+   * (an overwrite, not a max: "last processed" survives failovers where
+   * sequence numbers regress under a new server id)
+   */
+  add(gtid: {
+    domainId: number;
+    serverId: number;
+    seqNo: number | string;
+  }): void;
+  /**
+   * Whether a transaction ('domain-server-sequence', e.g. an event.gtid)
+   * is covered by this position. inclusive (default true) counts the
+   * position's own last transaction as covered (snapshot-barrier
+   * semantics); redelivery watermarks must pass { inclusive: false },
+   * because all events of a transaction share one GTID and an inclusive
+   * check would drop every replayed event of the watermark transaction
+   * after the first. A server-id mismatch within a domain and an unknown
+   * domain both report not covered; null/undefined is never covered; a
+   * malformed string throws.
+   */
+  covers(
+    gtid: string | null | undefined,
+    options?: { inclusive?: boolean },
+  ): boolean;
+  isEmpty(): boolean;
+  /** Text form, sorted by domain ('D-S-N[,D-S-N...]') */
   toString(): string;
 }

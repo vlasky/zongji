@@ -989,3 +989,8 @@ export default ZongJi;
 // already covered by my snapshot?") without their own parser. Handles
 // tagged GTIDs (MySQL 8.3+).
 export { GtidSet };
+// Its MariaDB counterpart: the position model behind zongji.gtidSet on
+// MariaDB servers, exported so consumers can parse persisted positions
+// and test coverage via covers() instead of hand-rolling seqNo
+// comparators (which silently round beyond 2^53 when done with Number).
+export { MariadbGtidPosition };

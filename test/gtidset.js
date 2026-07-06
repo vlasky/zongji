@@ -2,7 +2,10 @@
 import tap from 'tap';
 
 import { GtidSet } from '../lib/gtid_set.js';
-import { GtidSet as ExportedGtidSet } from '../index.js';
+import {
+  GtidSet as ExportedGtidSet,
+  MariadbGtidPosition as ExportedMariadbGtidPosition,
+} from '../index.js';
 import { MariadbGtidPosition } from '../lib/mariadb_gtid.js';
 import { PreviousGtids } from '../lib/binlog_event.js';
 import { Parser } from '../lib/reader.js';
@@ -61,8 +64,61 @@ tap.test('invalid input rejected', test => {
   test.throws(() => GtidSet.parse(`${UUID_A}:1e3`), 'exponent notation');
   test.throws(() => GtidSet.parse(`${UUID_A}:0x10`), 'hex notation');
   test.throws(() => GtidSet.parse(`${UUID_A}:1.0`), 'decimal point');
-  test.throws(() => GtidSet.parse(`${UUID_A}:9007199254740993`),
-    'beyond Number.MAX_SAFE_INTEGER');
+  test.throws(() => GtidSet.parse(`${UUID_A}:9223372036854775808`),
+    'beyond the GNO maximum of 2^63-1');
+  test.end();
+});
+
+tap.test('GNOs beyond 2^53 stay exact', test => {
+  // Round-trips either side of the Number safe-integer boundary and at
+  // the GNO maximum
+  for (const gno of ['9007199254740991', '9007199254740992',
+    '9007199254740993', '9223372036854775807']) {
+    test.equal(GtidSet.parse(`${UUID_A}:${gno}`).toString(),
+      `${UUID_A}:${gno}`, `${gno} round-trips`);
+  }
+
+  const set = GtidSet.parse(`${UUID_A}:1-9007199254740991`);
+  set.add(`${UUID_A}:9007199254740992`);
+  test.equal(set.toString(), `${UUID_A}:1-9007199254740992`,
+    'adjacency coalesces across the 2^53 boundary');
+  set.add(`${UUID_A}:9007199254740994`);
+  test.equal(set.toString(),
+    `${UUID_A}:1-9007199254740992:9007199254740994`,
+    'a gap of one above 2^53 stays a separate interval (no rounding)');
+  test.equal(set.contains(`${UUID_A}:9007199254740992`), true);
+  test.equal(set.contains(`${UUID_A}:9007199254740993`), false,
+    'the gap gno is not contained');
+  test.equal(set.contains(`${UUID_A}:9007199254740994`), true);
+
+  const max = GtidSet.parse(
+    `${UUID_A}:9223372036854775806-9223372036854775807`);
+  test.equal(max.contains(`${UUID_A}:9223372036854775807`), true,
+    'contains at 2^63-1');
+  test.equal(max.contains(`${UUID_A}:9223372036854775805`), false);
+  max.add(`${UUID_A}:9223372036854775805`);
+  test.equal(max.toString(),
+    `${UUID_A}:9223372036854775805-9223372036854775807`,
+    'add coalesces at the top of the range');
+
+  // The wire decoder must stay exact too: interval bounds are u64 and
+  // the resulting text seeds the executed-set tracker
+  const text = `${UUID_A}:1-5:9007199254740993-9223372036854775807`;
+  const encoded = GtidSet.parse(text).encode();
+  const parser = new Parser({
+    buffer: encoded, offset: 0, end: encoded.length,
+  });
+  const event = new PreviousGtids(parser,
+    { timestamp: 0, nextPosition: 0, size: encoded.length },
+    { useChecksum: false });
+  test.equal(event.gtidSet, text,
+    'PreviousGtids decodes bounds beyond 2^53 exactly');
+  test.same(event.sids[0].intervals,
+    [{ start: 1, end: 6 },
+      { start: '9007199254740993', end: '9223372036854775808' }],
+    'sids follow the Number-or-exact-string convention (end exclusive)');
+  test.doesNotThrow(() => JSON.stringify(event.sids),
+    'sids stay JSON-serialisable');
   test.end();
 });
 
@@ -204,6 +260,9 @@ tap.test('tagged GTIDs (MySQL 8.3+)', test => {
 });
 
 tap.test('MariadbGtidPosition', test => {
+  test.equal(ExportedMariadbGtidPosition, MariadbGtidPosition,
+    'MariadbGtidPosition is a named export of the package entry');
+
   test.test('parse round-trips', test => {
     for (const text of ['', '0-1-5', '0-1-5,1-2-10', '2-4294967295-9007199254740991']) {
       test.equal(MariadbGtidPosition.parse(text).toString(), text);
@@ -234,6 +293,54 @@ tap.test('MariadbGtidPosition', test => {
     test.equal(position.toString(), '0-2-3');
     position.add({ domainId: 7, serverId: 1, seqNo: 1 });
     test.equal(position.toString(), '0-2-3,7-1-1');
+    // event.seqNo beyond 2^53 arrives as an exact string
+    position.add({ domainId: 0, serverId: 2, seqNo: '9007199254740993' });
+    test.equal(position.toString(), '0-2-9007199254740993,7-1-1',
+      'string seqNo survives exactly');
+    test.end();
+  });
+
+  test.test('covers', test => {
+    const position =
+      MariadbGtidPosition.parse('0-1-100,1-2-9007199254740993');
+
+    // Inclusive (default): snapshot-barrier semantics, the position
+    // covers the whole of its own final transaction
+    test.equal(position.covers('0-1-100'), true, 'own watermark covered');
+    test.equal(position.covers('0-1-99'), true);
+    test.equal(position.covers('0-1-101'), false);
+
+    // Exclusive: redelivery-watermark semantics, the watermark
+    // transaction's own events must not read as already seen
+    test.equal(position.covers('0-1-100', { inclusive: false }), false,
+      'own watermark not covered exclusively');
+    test.equal(position.covers('0-1-99', { inclusive: false }), true);
+
+    // Exact beyond 2^53: as Numbers these two compare equal
+    test.equal(position.covers('1-2-9007199254740992', { inclusive: false }),
+      true);
+    test.equal(position.covers('1-2-9007199254740993', { inclusive: false }),
+      false, 'no rounding at the 2^53 boundary');
+    test.equal(position.covers('1-2-9007199254740993'), true);
+    test.equal(position.covers('1-2-9007199254740994'), false);
+
+    // Post-failover sequence numbers can regress under a new server id,
+    // so a mismatch is never covered, even for a lower seqNo
+    test.equal(position.covers('0-7-1'), false,
+      'server-id mismatch is not covered');
+    test.equal(position.covers('9-1-1'), false, 'unknown domain');
+    test.equal(position.covers(undefined), false,
+      'events before the first GTID event are never covered');
+    test.equal(position.covers(null), false);
+    test.throws(() => position.covers('garbage'), 'malformed input throws');
+    test.throws(() => position.covers('0-1'));
+
+    const max = MariadbGtidPosition.parse('0-1-18446744073709551615');
+    test.equal(max.covers('0-1-18446744073709551614', { inclusive: false }),
+      true, 'exact at the top of the u64 range');
+    test.equal(max.covers('0-1-18446744073709551615', { inclusive: false }),
+      false);
+    test.equal(max.covers('0-1-18446744073709551615'), true);
     test.end();
   });
 
