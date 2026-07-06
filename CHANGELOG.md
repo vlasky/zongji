@@ -2,7 +2,7 @@
 
 All notable changes to @vlasky/zongji since forking from nevill/zongji.
 
-## Unreleased
+## [0.8.0] - 2026-07-06
 
 - Export the `GtidSet` class (`import ZongJi, { GtidSet } from '@vlasky/zongji'`): parse a persisted set (e.g. a `zongji.gtidSet` checkpoint or `@@gtid_executed`), `add()` transactions, and test single-transaction membership with `contains(event.gtid)` - handy for snapshot drain barriers ("was this event already covered when I took my snapshot?") without maintaining a separate GTID parser. Fully tagged-GTID aware.
 - Close the remaining resume-position gap for multi-table statements (multi-table `UPDATE`, foreign-key cascades). The server writes all of a statement's TableMap events before any row event, so a `filename`/`position` pair persisted while the first table's rows were being processed pointed past the later TableMaps; a consumer resuming there dropped the remaining tables' rows with no error. The resume position now freezes at a transaction's first TableMap and advances to the commit marker's end position, so a persisted position always replays whole transactions. Behaviour change: for row-logged transactions the position advances per transaction rather than per event, so resuming after a mid-transaction crash re-delivers that transaction's earlier row events (at-least-once, as already documented for the single-table case fixed in 0.7.1). Statement-logged content (`binlog_format=STATEMENT`/`MIXED`) still advances per event; its replay has no table-metadata dependency, so it never had the dropped-rows hazard.
