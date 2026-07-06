@@ -949,7 +949,11 @@ tap.test('event.gtid detaches after XA PREPARE',
   const GTID_REGEX = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:\d+$/;
 
   const zongji = new ZongJi(settings.connection);
-  test.teardown(() => zongji.stop());
+  test.teardown(() => new Promise(resolve => {
+    zongji.stop();
+    // Resolve the prepared transaction if the test failed before commit
+    testDb.execute(["XA ROLLBACK 'detach1'"], () => resolve());
+  }));
 
   const events = [];
   zongji.on('binlog', evt => events.push(evt));
@@ -975,38 +979,48 @@ tap.test('event.gtid detaches after XA PREPARE',
         `INSERT INTO ${TEST_TABLE} (col) VALUES (1)`,
         "XA END 'detach1'",
         "XA PREPARE 'detach1'",
-        'FLUSH LOGS', // a real rotate while the transaction is prepared
-        "XA COMMIT 'detach1'",
-      ], xaErr => {
-        if (xaErr) {
-          return test.fail(xaErr);
+      ], prepareErr => {
+        if (prepareErr) {
+          return test.fail(prepareErr);
         }
-        expectEvents(test, events, [
-          { _type: 'Rotate' }, // artificial, at dump start
-          { _type: 'Query' },  // XA START
-          tableMapEvent(TEST_TABLE),
-          { _type: 'WriteRows' },
-          { _type: 'Query' },  // XA END
-          { _type: 'XaPrepare' },
-          { _type: 'Rotate' }, // real, written by FLUSH LOGS
-          { _type: 'Rotate' }, // artificial, opening the new file
-          { _type: 'Query' },  // XA COMMIT
-        ], 1, () => {
-          const [, xaStart, tm, wr, xaEnd, prepare,
-            rotate1, rotate2, xaCommit] = events;
-          test.match(prepare.gtid, GTID_REGEX,
-            'the XA PREPARE event keeps its transaction GTID');
-          for (const evt of [xaStart, tm, wr, xaEnd]) {
-            test.equal(evt.gtid, prepare.gtid,
-              `${evt.getTypeName()} shares the transaction GTID`);
+        // A separate connection: on MySQL 5.7 the preparing session may
+        // run nothing else until the transaction resolves
+        // (ER_XAER_RMFAIL), and committing a prepared transaction from
+        // another session is ordinary XA usage
+        testDb.execute([
+          'FLUSH LOGS', // a real rotate while the transaction is prepared
+          "XA COMMIT 'detach1'",
+        ], xaErr => {
+          if (xaErr) {
+            return test.fail(xaErr);
           }
-          test.equal(rotate1.gtid, undefined,
-            'the rotate after XA PREPARE belongs to no transaction');
-          test.equal(rotate2.gtid, undefined);
-          test.match(xaCommit.gtid, GTID_REGEX);
-          test.not(xaCommit.gtid, prepare.gtid,
-            'XA COMMIT arrives under its own GTID');
-          test.end();
+          expectEvents(test, events, [
+            { _type: 'Rotate' }, // artificial, at dump start
+            { _type: 'Query' },  // XA START
+            tableMapEvent(TEST_TABLE),
+            { _type: 'WriteRows' },
+            { _type: 'Query' },  // XA END
+            { _type: 'XaPrepare' },
+            { _type: 'Rotate' }, // real, written by FLUSH LOGS
+            { _type: 'Rotate' }, // artificial, opening the new file
+            { _type: 'Query' },  // XA COMMIT
+          ], 1, () => {
+            const [, xaStart, tm, wr, xaEnd, prepare,
+              rotate1, rotate2, xaCommit] = events;
+            test.match(prepare.gtid, GTID_REGEX,
+              'the XA PREPARE event keeps its transaction GTID');
+            for (const evt of [xaStart, tm, wr, xaEnd]) {
+              test.equal(evt.gtid, prepare.gtid,
+                `${evt.getTypeName()} shares the transaction GTID`);
+            }
+            test.equal(rotate1.gtid, undefined,
+              'the rotate after XA PREPARE belongs to no transaction');
+            test.equal(rotate2.gtid, undefined);
+            test.match(xaCommit.gtid, GTID_REGEX);
+            test.not(xaCommit.gtid, prepare.gtid,
+              'XA COMMIT arrives under its own GTID');
+            test.end();
+          });
         });
       });
     });
