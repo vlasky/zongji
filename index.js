@@ -984,3 +984,8 @@ class ZongJi extends EventEmitter {
 }
 
 export default ZongJi;
+// The GTID set model behind zongji.gtidSet, exported so consumers can
+// parse persisted sets and test membership (e.g. "was this event.gtid
+// already covered by my snapshot?") without their own parser. Handles
+// tagged GTIDs (MySQL 8.3+).
+export { GtidSet };

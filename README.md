@@ -209,6 +209,17 @@ zongji.start({ gtidSet: savedGtidSet, serverId: 5 });
 
 Unlike file+position checkpoints, a GTID checkpoint is valid on any server in the same replication topology, which makes resuming across a failover possible. The server performs the skipping itself, so already-processed transactions are not resent.
 
+The `GtidSet` class behind it is exported for consumers that need to work with GTID sets themselves, e.g. testing whether an incoming `event.gtid` was already covered by a snapshot:
+
+```javascript
+import { GtidSet } from '@vlasky/zongji';
+
+const snapshot = GtidSet.parse(savedGtidSet); // or @@gtid_executed
+if (!snapshot.contains(event.gtid)) {
+  applyChange(event);
+}
+```
+
 `zongji.gtidSet` is available when `start()` was given a `gtidSet`, with `startAtEnd` (seeded from the server's `gtid_executed` on MySQL, `gtid_current_pos` on MariaDB), or when reading from the start of a binlog file (seeded from its Previous_gtids or MariaDB GTID list event). It is `undefined` when resuming from an arbitrary mid-file file+position checkpoint, where no exact value can be known. Tagged GTIDs (MySQL 8.3+) are fully supported: tagged transactions appear in the set as `uuid:…:tag:intervals` sections, and a checkpoint containing tags resumes correctly (its wire encoding is only understood by MySQL 8.3+ servers).
 
 On MySQL, GTID resume requires `gtid_mode=ON` and a set is a per-source-UUID collection of intervals. On MariaDB, GTIDs are always on and a position is a single watermark per replication domain (`domain-server-sequence`): resuming replays each listed domain after its watermark, and domains not listed replay from the beginning. If the server has purged binlogs your checkpoint still needs, `start()` emits an error (code 1236) naming the problem; MariaDB additionally reports a checkpoint ahead of its binlog as error 1945/1955. A fresh snapshot is then required.

@@ -2,6 +2,7 @@
 import tap from 'tap';
 
 import { GtidSet } from '../lib/gtid_set.js';
+import { GtidSet as ExportedGtidSet } from '../index.js';
 import { MariadbGtidPosition } from '../lib/mariadb_gtid.js';
 import { PreviousGtids } from '../lib/binlog_event.js';
 import { Parser } from '../lib/reader.js';
@@ -96,6 +97,32 @@ tap.test('encode layout details', test => {
   test.equal(encoded.readBigUInt64LE(40), 6n, 'interval end is exclusive');
   test.equal(GtidSet.parse('').encode().length, 8,
     'empty set encodes as zero sids');
+  test.end();
+});
+
+tap.test('contains tests single-transaction membership', test => {
+  test.equal(ExportedGtidSet, GtidSet,
+    'GtidSet is a named export of the package entry');
+
+  const set = GtidSet.parse(`${UUID_A}:1-5:11:tag_a:3-4,${UUID_B}:7`);
+  test.equal(set.contains(`${UUID_A}:3`), true);
+  test.equal(set.contains(`${UUID_A}:5`), true, 'interval end inclusive');
+  test.equal(set.contains(`${UUID_A}:11`), true, 'single-gno interval');
+  test.equal(set.contains(`${UUID_A}:6`), false, 'gap between intervals');
+  test.equal(set.contains(`${UUID_B}:7`), true);
+  test.equal(set.contains(`${UUID_B}:8`), false);
+  test.equal(set.contains(`${UUID_A}:tag_a:3`), true, 'tagged member');
+  test.equal(set.contains(`${UUID_A}:TAG_A:4`), true, 'tag case-folds');
+  test.equal(set.contains(`${UUID_A}:tag_a:5`), false,
+    'tagged intervals are their own source');
+  test.equal(set.contains(`${UUID_A}:tag_b:3`), false, 'unknown tag');
+  test.equal(set.contains('11111111-2222-3333-4444-555555555555:1'),
+    false, 'unknown uuid');
+  test.equal(set.contains(undefined), false,
+    'anonymous transactions (event.gtid undefined) are never contained');
+  test.equal(set.contains(null), false);
+  test.throws(() => set.contains('garbage'), 'malformed input throws');
+  test.throws(() => set.contains(`${UUID_A}:not a tag!:1`));
   test.end();
 });
 

@@ -643,3 +643,31 @@ declare class ZongJi extends EventEmitter {
 }
 
 export default ZongJi;
+
+/**
+ * A MySQL GTID set (the model behind zongji.gtidSet): which transactions
+ * per source are already executed. String form matches @@gtid_executed,
+ * including tagged GTIDs (MySQL 8.3+): 'uuid:1-5:11,uuid2:1-27',
+ * 'uuid:1-5:tag_a:1'. Exported so consumers can parse persisted sets and
+ * test event.gtid membership without their own parser.
+ */
+export class GtidSet {
+  /**
+   * Parses a GTID set string ('' gives an empty set). Within a uuid
+   * block a non-numeric item is a tag naming the source of the interval
+   * items that follow it. Throws on malformed input.
+   */
+  static parse(text: string): GtidSet;
+  /** Adds a single transaction ('uuid:gno' or 'uuid:tag:gno') */
+  add(gtid: string): void;
+  /**
+   * Whether a single transaction ('uuid:gno' or 'uuid:tag:gno', e.g. an
+   * event.gtid) is contained in the set. null/undefined (an anonymous
+   * transaction's event.gtid) is never contained; a malformed string
+   * throws.
+   */
+  contains(gtid: string | null | undefined): boolean;
+  isEmpty(): boolean;
+  /** Canonical text form (sorted; tagged intervals after untagged) */
+  toString(): string;
+}
