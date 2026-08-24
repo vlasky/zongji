@@ -199,6 +199,8 @@ export type BinLogEvent =
 // @vlasky/mysql Connection
 export interface MySQLConnection {
   _socket?: Socket;
+  /** One of 'disconnected', 'connected', 'authenticated' or 'protocol_error'. */
+  state: string;
   /** There are other forms of this method as well - this is the most basic one. */
   query(sql: string, callback: (error: any, results: any, fields: any) => void): void;
   destroy(): void;
