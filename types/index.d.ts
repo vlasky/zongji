@@ -203,6 +203,11 @@ export interface MySQLConnection {
   state: string;
   /** There are other forms of this method as well - this is the most basic one. */
   query(sql: string, callback: (error: any, results: any, fields: any) => void): void;
+  /**
+   * Options form of query. The driver starts `timeout` when the query begins executing, not when
+   * it is queued behind other queries on the connection.
+   */
+  query(options: { sql: string; timeout?: number }, callback: (error: any, results: any, fields: any) => void): void;
   destroy(): void;
 }
 
