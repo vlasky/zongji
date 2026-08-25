@@ -17,6 +17,14 @@ export type ZongjiOptions = {
   password: string;
   dateStrings?: boolean;
   timeZone?: string;
+  /**
+   *  Enable TCP keepalive on the sockets of the binlog and control connections. Defaults to false.
+   */
+  enableKeepAlive?: boolean;
+  /**
+   *  Initial delay in milliseconds before the first TCP keepalive probe is sent on an idle socket.
+   */
+  keepAliveInitialDelay?: number;
 };
 
 /**
@@ -191,14 +199,31 @@ export type BinLogEvent =
 // @vlasky/mysql Connection
 export interface MySQLConnection {
   _socket?: Socket;
+  /** One of 'disconnected', 'connected', 'authenticated' or 'protocol_error'. */
+  state: string;
   /** There are other forms of this method as well - this is the most basic one. */
   query(sql: string, callback: (error: any, results: any, fields: any) => void): void;
+  /**
+   * Options form of query. The driver starts `timeout` when the query begins executing, not when
+   * it is queued behind other queries on the connection.
+   */
+  query(options: { sql: string; timeout?: number }, callback: (error: any, results: any, fields: any) => void): void;
+  destroy(): void;
 }
 
 export declare class ZongJi extends EventEmitter {
   stopped: boolean;
   connection: MySQLConnection;
-  constructor(options: ZongjiOptions);
+  /**
+   *  Connection used for table metadata queries and for the KILL query issued during stop().
+   */
+  ctrlConnection: MySQLConnection;
+  /**
+   *  Zongji can also be constructed with an existing @vlasky/mysql connection, which it then uses
+   *  as its control connection. Zongji does not destroy connections it did not create, so the
+   *  caller stays responsible for destroying a connection passed in here.
+   */
+  constructor(options: ZongjiOptions | MySQLConnection);
 
   start(options: StartOptions): void;
   stop(): void;
