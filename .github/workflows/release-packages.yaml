@@ -18,10 +18,13 @@ jobs:
     name: Release Packages
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
       - name: Enable Corepack
-        run: corepack enable
+        run: |
+          npm install -g corepack@latest
+          corepack enable pnpm  
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -31,10 +34,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
-      - name: Update npm
-        run: |
-          npm install -g npm@latest
-          npm --version
 
       - name: Create Release Pull Request or Publish to npm
         id: changesets

@@ -2,7 +2,13 @@
 name: Test Packages
 
 on:
+  workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
 
 jobs:
   test:
@@ -15,9 +21,19 @@ jobs:
         mysql-version: [ 8.0, 8.4 ]
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
       - name: Enable Corepack
-        run: corepack enable
+        run: |
+          npm install -g corepack@latest
+          corepack enable pnpm  
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
 
       - name: Start MySQL
         run: |
@@ -26,13 +42,26 @@ jobs:
           -e MYSQL_ROOT_PASSWORD=my_password \
           -p 3306:3306 \
           -d mysql:${{ matrix.mysql-version }} \
-          --log-bin=/var/lib/mysql/mysql-bin.log
+          --log-bin=/var/lib/mysql/mysql-bin.log \
+          --gtid_mode=ON \
+          --enforce_gtid_consistency=ON \
+          --server-id=1 \
+          --binlog-format=ROW
 
-      - name: Setup NodeJS
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache: pnpm
+      - name: Wait for MySQL
+        run: |
+          echo "Waiting for MySQL to accept connections..."
+          for i in {1..60}; do
+            if docker exec zongji_test mysql --protocol=TCP -h127.0.0.1 -uroot -pmy_password -e "SELECT 1" >/dev/null 2>&1; then
+              echo "MySQL is ready"
+              exit 0
+            fi
+            echo "Waiting for MySQL... attempt $i/60"
+            sleep 2
+          done
+          echo "MySQL did not become ready in time"
+          docker logs zongji_test
+          exit 1
 
       - name: Install dependencies
         run: pnpm install
