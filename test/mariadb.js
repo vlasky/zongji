@@ -731,4 +731,195 @@ testDb.requireMariaDb(() => {
       }, 1500);
     });
   });
+
+  tap.test('MariaDB JSON columns (LONGTEXT alias)', test => {
+    const TEST_TABLE = 'mariadb_json_test';
+    // The big integer exceeds Number.MAX_SAFE_INTEGER: JSON.parse would
+    // silently round it to ...92. Exactness needs JSON.parse source
+    // access (Node 22+); older runtimes deliberately fall back to plain
+    // JSON.parse, so expect the rounded Number there
+    const sourceAccessSupported = (() => {
+      let supported = false;
+      JSON.parse('0', (key, value, context) => {
+        supported = context !== undefined &&
+          typeof context.source === 'string';
+        return value;
+      });
+      return supported;
+    })();
+    const BIG_EXPECTED = sourceAccessSupported ?
+      '9007199254740993' : 9007199254740992;
+    const DOC = '{"n": 1, "big": 9007199254740993, "s": "x"}';
+    const CHECKED_DOC = '{"n": 2}';
+    const PLAIN_DOC = '{"n": 3}';
+    const BACKTICK_DOC = '{"n": 4}';
+
+    test.test(`prepare table ${TEST_TABLE}`, test => {
+      // JSON detection uses the column's json_valid check constraint via
+      // INFORMATION_SCHEMA, so it needs the non-self-describing metadata
+      // path; MINIMAL is the server default, pin it in case a FULL test
+      // left it set
+      testDb.execute([
+        'SET GLOBAL binlog_row_metadata = MINIMAL',
+        `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+        // jc: the server flags any longtext with a column-level
+        // json_valid check as JSON on the wire, declared JSON or not;
+        // t: valid JSON text in a plain LONGTEXT must stay a string
+        // (detection is by constraint, not content); the backticked
+        // name pins the identifier escaping in the detection join
+        `CREATE TABLE ${TEST_TABLE} (
+          id INT PRIMARY KEY,
+          j JSON,
+          jc LONGTEXT CHECK (json_valid(jc)),
+          t LONGTEXT,
+          \`bt\`\`ick\` JSON
+        )`,
+      ], err => {
+        if (err) {
+          return test.fail(err);
+        }
+        test.end();
+      });
+    });
+
+    test.test('parsed values by default, 64-bit integers exact', test => {
+      const zongji = new ZongJi({
+        ...settings.connection, jsonStrings: false,
+      });
+      test.teardown(() => zongji.stop());
+      zongji.on('error', err => test.fail(err));
+
+      let row = null;
+      let schemas = null;
+      zongji.on('binlog', evt => {
+        if (evt.getTypeName() === 'WriteRows' &&
+            evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+          row = evt.rows[0];
+          schemas = evt.tableMap[evt.tableId].columnSchemas;
+        }
+      });
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} VALUES
+            (1, '${DOC}', '${CHECKED_DOC}', '${PLAIN_DOC}',
+             '${BACKTICK_DOC}')`,
+        ], err => {
+          if (err) {
+            return test.fail(err);
+          }
+          setTimeout(() => {
+            test.same(row.j, { n: 1, big: BIG_EXPECTED, s: 'x' },
+              'declared JSON parses; big integer arrives exact (Node 22+)');
+            test.same(row.jc, { n: 2 },
+              'json_valid-checked LONGTEXT parses too (matches the ' +
+              'server wire-protocol JSON flag)');
+            test.equal(row.t, PLAIN_DOC,
+              'plain LONGTEXT stays a string even when it holds JSON');
+            test.same(row['bt`ick'], { n: 4 },
+              'backticks in the column name survive detection');
+            test.same(schemas.map(schema => schema.IS_JSON),
+              [false, true, true, false, true],
+              'IS_JSON marks all three');
+            test.end();
+          }, 1500);
+        });
+      });
+    });
+
+    test.test('jsonStrings: true keeps the raw text', test => {
+      const zongji = new ZongJi({
+        ...settings.connection, jsonStrings: true,
+      });
+      test.teardown(() => zongji.stop());
+      zongji.on('error', err => test.fail(err));
+
+      let row = null;
+      zongji.on('binlog', evt => {
+        if (evt.getTypeName() === 'WriteRows' &&
+            evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+          row = evt.rows[0];
+        }
+      });
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+      zongji.on('ready', () => {
+        testDb.execute([
+          `INSERT INTO ${TEST_TABLE} VALUES
+            (2, '${DOC}', '${CHECKED_DOC}', '${PLAIN_DOC}',
+             '${BACKTICK_DOC}')`,
+        ], err => {
+          if (err) {
+            return test.fail(err);
+          }
+          setTimeout(() => {
+            test.equal(row.j, DOC,
+              'raw stored text, 64-bit integer digits intact');
+            test.equal(row.jc, CHECKED_DOC);
+            test.equal(row.t, PLAIN_DOC);
+            test.equal(row['bt`ick'], BACKTICK_DOC);
+            test.end();
+          }, 1500);
+        });
+      });
+    });
+
+    // The json_valid constraint is not enforced for a session that sets
+    // check_constraint_checks=0, so a JSON column can hold text that does
+    // not parse. The value must arrive as the raw string and the stream
+    // must carry on
+    test.test('invalid JSON stays a string', test => {
+      const INVALID_DOC = 'not json';
+      const zongji = new ZongJi({
+        ...settings.connection, jsonStrings: false,
+      });
+      test.teardown(() => zongji.stop());
+      zongji.on('error', err => test.fail(err));
+
+      let row = null;
+      zongji.on('binlog', evt => {
+        if (evt.getTypeName() === 'WriteRows' &&
+            evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
+          row = evt.rows[0];
+        }
+      });
+
+      zongji.start({
+        startAtEnd: true,
+        serverId: testDb.serverId(),
+        includeEvents: ['tablemap', 'writerows'],
+      });
+      zongji.on('ready', () => {
+        testDb.execute([
+          'SET SESSION check_constraint_checks = 0',
+          `INSERT INTO ${TEST_TABLE} VALUES
+            (3, '${INVALID_DOC}', '${CHECKED_DOC}', '${PLAIN_DOC}',
+             '${BACKTICK_DOC}')`,
+          'SET SESSION check_constraint_checks = 1',
+        ], err => {
+          if (err) {
+            return test.fail(err);
+          }
+          setTimeout(() => {
+            test.equal(row.j, INVALID_DOC,
+              'unparseable text is delivered as stored');
+            test.same(row.jc, { n: 2 },
+              'other JSON columns in the same row still parse');
+            test.end();
+          }, 1500);
+        });
+      });
+    });
+
+    test.end();
+  });
 });

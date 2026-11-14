@@ -678,8 +678,12 @@ testDb.requireVersion('8.0.20', () => {
 // The binlog stream with connection compression patches mysql2's
 // handlePacket to sync sequence IDs (MySQL resets inner packet sequence
 // numbers within compressed chunks). This exercises that patch against
-// the installed mysql2 version: events must arrive intact and without
-// "packets out of order" warnings.
+// the installed mysql2 version: events must arrive intact, in order and
+// without "packets out of order" warnings. Row sizes are mixed on purpose:
+// mysql2 inflates payloads up to 16 KB inline and larger ones on the
+// thread pool, and a packet may only be handled inline while no earlier
+// one is still queued, so interleaving both sizes covers the hand-over
+// between the two paths.
 tap.test('Binlog stream with connection compression', test => {
   const TEST_TABLE = 'compression_conn_test';
 
@@ -706,7 +710,7 @@ tap.test('Binlog stream with connection compression', test => {
 
   testDb.execute([
     `DROP TABLE IF EXISTS ${TEST_TABLE}`,
-    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED, txt VARCHAR(100))`,
+    `CREATE TABLE ${TEST_TABLE} (col INT UNSIGNED, txt MEDIUMTEXT)`,
   ], err => {
     if (err) {
       return test.fail(err);
@@ -719,8 +723,11 @@ tap.test('Binlog stream with connection compression', test => {
     });
 
     zongji.on('ready', () => {
-      const inserts = Array.from({ length: 5 }, (_, i) =>
-        `INSERT INTO ${TEST_TABLE} (col, txt) VALUES (${i}, REPEAT('x', 100))`);
+      // 40000 bytes exceeds mysql2's 16 KB inline-inflate limit; 100 and
+      // 1 stay under it
+      const sizes = Array.from({ length: 12 }, (_, i) => [40000, 100, 1][i % 3]);
+      const inserts = sizes.map((size, i) =>
+        `INSERT INTO ${TEST_TABLE} (col, txt) VALUES (${i}, REPEAT('x', ${size}))`);
       testDb.execute(inserts, insertErr => {
         if (insertErr) {
           return test.fail(insertErr);
@@ -728,13 +735,18 @@ tap.test('Binlog stream with connection compression', test => {
         expectEvents(test, events, [
           tableMapEvent(TEST_TABLE),
           { _type: 'WriteRows' },
-        ], 5, () => {
+        ], sizes.length, () => {
           test.equal(errors.length, 0, 'no errors over compressed stream');
           test.equal(warnings.length, 0, 'no sequence ID warnings');
-          const values = events
+          const rows = events
             .filter(e => e.getTypeName() === 'WriteRows')
-            .map(e => e.rows[0].col);
-          test.strictSame(values, [0, 1, 2, 3, 4]);
+            .map(e => e.rows[0]);
+          test.strictSame(rows.map(row => row.col), sizes.map((_, i) => i),
+            'rows arrive in order');
+          test.strictSame(rows.map(row => row.txt.length), sizes,
+            'row payloads arrive intact');
+          test.ok(rows.every(row => /^x+$/.test(row.txt)),
+            'row contents are uncorrupted');
           test.end();
         });
       });
@@ -1534,5 +1546,90 @@ tap.test('filtered rotate events keep the resume pair coherent', test => {
         }, 1000);
       });
     });
+  });
+});
+
+tap.test('Generated columns (virtual and stored)', test => {
+  const TEST_TABLE = 'generated_columns_test';
+  const zongji = new ZongJi(settings.connection);
+  test.teardown(() => zongji.stop());
+
+  const events = [];
+  const errors = [];
+  zongji.on('binlog', evt => events.push(evt));
+  zongji.on('error', err => errors.push(err));
+
+  // The EXTRA assertions need the INFORMATION_SCHEMA fetch path, which
+  // only runs when TableMap events are not self-describing. MINIMAL is
+  // the server default; pin it in case the server was left on FULL.
+  // Best-effort: the variable does not exist before MySQL 8.0 (where
+  // MINIMAL is all there is).
+  testDb.execute(['SET GLOBAL binlog_row_metadata = MINIMAL'], () => {
+  testDb.execute([
+    `DROP TABLE IF EXISTS ${TEST_TABLE}`,
+    // Both flavours materialise generated columns (virtual and stored)
+    // into the TableMap and row images as computed values, so they
+    // decode like ordinary columns
+    `CREATE TABLE ${TEST_TABLE} (
+      id INT PRIMARY KEY,
+      a INT,
+      v INT AS (a * 2) VIRTUAL,
+      s INT AS (a + 1) STORED,
+      b VARCHAR(10)
+    )`,
+  ], err => {
+    if (err) {
+      return test.fail(err);
+    }
+
+    zongji.start({
+      startAtEnd: true,
+      serverId: testDb.serverId(),
+      includeEvents: ['tablemap', 'writerows', 'updaterows', 'deleterows'],
+    });
+
+    zongji.on('ready', () => {
+      testDb.execute([
+        `INSERT INTO ${TEST_TABLE} (id, a, b) VALUES (1, 10, 'x')`,
+        `UPDATE ${TEST_TABLE} SET a = 20 WHERE id = 1`,
+        `DELETE FROM ${TEST_TABLE} WHERE id = 1`,
+      ], err => {
+        if (err) {
+          return test.fail(err);
+        }
+        setTimeout(() => {
+          test.equal(errors.length, 0, `no errors (got [${errors}])`);
+
+          const rowEvents = events.filter(evt =>
+            ['WriteRows', 'UpdateRows', 'DeleteRows']
+              .includes(evt.getTypeName()) &&
+            evt.tableMap[evt.tableId].tableName === TEST_TABLE);
+          test.equal(rowEvents.length, 3,
+            'one write, one update, one delete');
+          const [write, update, del] = rowEvents;
+
+          test.same(write.rows[0],
+            { id: 1, a: 10, v: 20, s: 11, b: 'x' },
+            'insert carries computed virtual and stored values');
+          test.same(update.rows[0].before,
+            { id: 1, a: 10, v: 20, s: 11, b: 'x' });
+          test.same(update.rows[0].after,
+            { id: 1, a: 20, v: 40, s: 21, b: 'x' },
+            'update after-image carries recomputed values');
+          test.same(del.rows[0],
+            { id: 1, a: 20, v: 40, s: 21, b: 'x' });
+
+          // EXTRA identifies generated-ness; the strings are identical
+          // on MySQL and MariaDB
+          const schemas = write.tableMap[write.tableId].columnSchemas;
+          test.equal(schemas[2].EXTRA, 'VIRTUAL GENERATED');
+          test.equal(schemas[3].EXTRA, 'STORED GENERATED');
+          test.equal(schemas[1].EXTRA, '',
+            'ordinary columns have an empty EXTRA');
+          test.end();
+        }, 1500);
+      });
+    });
+  });
   });
 });

@@ -9,11 +9,39 @@ const ConnectionConfigMap = {
   'Pool': obj => obj.config.connectionConfig,
 };
 
+// EXTRA identifies generated columns ('VIRTUAL GENERATED' / 'STORED
+// GENERATED', identical on MySQL and MariaDB), auto_increment, ON UPDATE
+// clauses and invisible columns. The binlog itself carries none of this
+// (even binlog_row_metadata=FULL has no field for it), so it is only
+// available on this fetch path.
 const TableInfoQuery = `SELECT
   COLUMN_NAME, COLLATION_NAME, CHARACTER_SET_NAME,
-  COLUMN_COMMENT, COLUMN_TYPE
+  COLUMN_COMMENT, COLUMN_TYPE, EXTRA
   FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?
   ORDER BY ORDINAL_POSITION`;
+
+// MariaDB variant: additionally detects JSON columns. MariaDB JSON is a
+// LONGTEXT alias whose only catalogue trace is the automatic column-level
+// json_valid check constraint - the same source the server derives its
+// wire-protocol JSON format flag from, so this detection matches what a
+// mysql2 query sees exactly (including manually declared
+// LONGTEXT CHECK (json_valid(col)) columns, which the server also treats
+// as JSON). MySQL's CHECK_CONSTRAINTS lacks TABLE_NAME and LEVEL, so this
+// query is MariaDB-only.
+const MariadbTableInfoQuery = `SELECT
+  c.COLUMN_NAME, c.COLLATION_NAME, c.CHARACTER_SET_NAME,
+  c.COLUMN_COMMENT, c.COLUMN_TYPE, c.EXTRA,
+  (cc.CHECK_CLAUSE IS NOT NULL) AS IS_JSON
+  FROM INFORMATION_SCHEMA.COLUMNS c
+  LEFT JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
+    ON cc.CONSTRAINT_SCHEMA = c.TABLE_SCHEMA
+    AND cc.TABLE_NAME = c.TABLE_NAME
+    AND cc.\`LEVEL\` = 'Column'
+    AND cc.CONSTRAINT_NAME = c.COLUMN_NAME
+    AND cc.CHECK_CLAUSE = CONCAT('json_valid(\`',
+      REPLACE(c.COLUMN_NAME, '\`', '\`\`'), '\`)')
+  WHERE c.TABLE_SCHEMA=? AND c.TABLE_NAME=?
+  ORDER BY c.ORDINAL_POSITION`;
 
 class ZongJi extends EventEmitter {
   constructor(dsn) {
@@ -335,11 +363,12 @@ class ZongJi extends EventEmitter {
     }
 
     const params = [tableMapEvent.schemaName, tableMapEvent.tableName];
+    const query = this.isMariaDb ? MariadbTableInfoQuery : TableInfoQuery;
     try {
       // execute() uses a server-side prepared statement: parameters are sent
       // out-of-band (never spliced into SQL text) and the statement is cached
       // per connection, so repeated metadata lookups avoid re-parsing.
-      this.ctrlConnection.execute(TableInfoQuery, params, (err, rows) => {
+      this.ctrlConnection.execute(query, params, (err, rows) => {
       if (err) {
         // Errors should be emitted
         this.emit('error', err);
@@ -355,6 +384,14 @@ class ZongJi extends EventEmitter {
         // This is a fatal error, no additional binlog events will be
         // processed since next() will never be called
         return;
+      }
+
+      if (this.isMariaDb) {
+        // The join computes IS_JSON as 1/0; expose a boolean, tolerating
+        // driver settings that surface the value as a string or BigInt
+        for (const row of rows) {
+          row.IS_JSON = Boolean(Number(row.IS_JSON));
+        }
       }
 
       this.tableMap[tableMapEvent.tableId] = {
