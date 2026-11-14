@@ -60,19 +60,24 @@ export interface ColumnSchema {
    * ordinary columns. Other content is flavour-dependent (e.g.
    * 'auto_increment', ON UPDATE markers, MySQL's 'DEFAULT_GENERATED').
    * Only on the INFORMATION_SCHEMA fetch path: the binlog carries no
-   * generated-column information, so under binlog_row_metadata=FULL
-   * this is undefined.
+   * generated-column information, so for tables described by the binlog
+   * itself (binlog_row_metadata=FULL) this is undefined.
    */
   EXTRA?: string;
   /**
    * MariaDB only: true when the column is JSON (a LONGTEXT alias,
    * identified by its automatic column-level json_valid check
    * constraint - the same source the server derives its wire-protocol
-   * JSON flag from, so manually declared LONGTEXT CHECK (json_valid(col))
-   * columns count too). Values then arrive parsed (or as raw text with
-   * the jsonStrings connection option), matching mysql2 query results.
-   * Only on the INFORMATION_SCHEMA fetch path; undefined on MySQL and
-   * under binlog_row_metadata=FULL.
+   * JSON flag from, so a manually declared CHECK (json_valid(col)) on a
+   * column of any character or binary string type counts too; other
+   * types, e.g. DECIMAL or ENUM, do not). Values then arrive parsed (or
+   * as raw text with the jsonStrings connection option), matching mysql2
+   * query results, with one exception: binary columns are read as UTF-8,
+   * where mysql2 maps their bytes one-to-one to characters, so non-ASCII
+   * text differs.
+   * Only on the INFORMATION_SCHEMA fetch path; undefined on MySQL, for
+   * tables described by the binlog itself (binlog_row_metadata=FULL), and
+   * on MariaDB before 10.5.10, whose catalogue cannot express the check.
    */
   IS_JSON?: boolean;
   /** Exact signedness from binlog metadata (MySQL 8.0+); numeric columns only */

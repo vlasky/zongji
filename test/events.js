@@ -1608,7 +1608,7 @@ tap.test('Generated columns (virtual and stored)', test => {
             'one write, one update, one delete');
           const [write, update, del] = rowEvents;
 
-          test.same(write.rows[0],
+          test.strictSame(write.rows[0],
             { id: 1, a: 10, v: 20, s: 11, b: 'x' },
             'insert carries computed virtual and stored values');
 
@@ -1619,13 +1619,13 @@ tap.test('Generated columns (virtual and stored)', test => {
           // behaviour on MariaDB, but never a mix within one event set
           const omitted = IS_MARIADB && update.rows[0].before.v === null;
           const generated = (v, s) => omitted ? { v: null, s: null } : { v, s };
-          test.same(update.rows[0].before,
+          test.strictSame(update.rows[0].before,
             { id: 1, a: 10, ...generated(20, 11), b: 'x' },
             'update before-image: generated columns computed or omitted');
-          test.same(update.rows[0].after,
+          test.strictSame(update.rows[0].after,
             { id: 1, a: 20, ...generated(40, 21), b: 'x' },
             'update after-image: generated columns recomputed or omitted');
-          test.same(del.rows[0],
+          test.strictSame(del.rows[0],
             { id: 1, a: 20, ...generated(40, 21), b: 'x' },
             'delete image: generated columns computed or omitted');
 

@@ -3,6 +3,7 @@
 // interim rejection of MySQL-style GTID resume. The whole file no-ops
 // against a MySQL server.
 import tap from 'tap';
+import mysql from 'mysql2';
 
 import ZongJi from '../index.js';
 import * as testDb from './helpers/index.js';
@@ -783,9 +784,11 @@ testDb.requireMariaDb(() => {
     });
 
     test.test('parsed values by default, 64-bit integers exact', test => {
-      const zongji = new ZongJi({
-        ...settings.connection, jsonStrings: false,
-      });
+      // The shared test settings turn jsonStrings on; drop the key so
+      // this exercises the option's default
+      const defaults = { ...settings.connection };
+      delete defaults.jsonStrings;
+      const zongji = new ZongJi(defaults);
       test.teardown(() => zongji.stop());
       zongji.on('error', err => test.fail(err));
 
@@ -814,16 +817,16 @@ testDb.requireMariaDb(() => {
             return test.fail(err);
           }
           setTimeout(() => {
-            test.same(row.j, { n: 1, big: BIG_EXPECTED, s: 'x' },
+            test.strictSame(row.j, { n: 1, big: BIG_EXPECTED, s: 'x' },
               'declared JSON parses; big integer arrives exact (Node 22+)');
-            test.same(row.jc, { n: 2 },
+            test.strictSame(row.jc, { n: 2 },
               'json_valid-checked LONGTEXT parses too (matches the ' +
               'server wire-protocol JSON flag)');
             test.equal(row.t, PLAIN_DOC,
               'plain LONGTEXT stays a string even when it holds JSON');
-            test.same(row['bt`ick'], { n: 4 },
+            test.strictSame(row['bt`ick'], { n: 4 },
               'backticks in the column name survive detection');
-            test.same(schemas.map(schema => schema.IS_JSON),
+            test.strictSame(schemas.map(schema => schema.IS_JSON),
               [false, true, true, false, true],
               'IS_JSON marks all three');
             test.end();
@@ -885,11 +888,11 @@ testDb.requireMariaDb(() => {
       test.teardown(() => zongji.stop());
       zongji.on('error', err => test.fail(err));
 
-      let row = null;
+      const rows = [];
       zongji.on('binlog', evt => {
         if (evt.getTypeName() === 'WriteRows' &&
             evt.tableMap[evt.tableId].tableName === TEST_TABLE) {
-          row = evt.rows[0];
+          rows.push(evt.rows[0]);
         }
       });
 
@@ -905,20 +908,186 @@ testDb.requireMariaDb(() => {
             (3, '${INVALID_DOC}', '${CHECKED_DOC}', '${PLAIN_DOC}',
              '${BACKTICK_DOC}')`,
           'SET SESSION check_constraint_checks = 1',
+          `INSERT INTO ${TEST_TABLE} VALUES
+            (4, '${DOC}', '${CHECKED_DOC}', '${PLAIN_DOC}',
+             '${BACKTICK_DOC}')`,
         ], err => {
           if (err) {
             return test.fail(err);
           }
           setTimeout(() => {
-            test.equal(row.j, INVALID_DOC,
+            test.equal(rows.length, 2, 'both rows delivered');
+            test.equal(rows[0].j, INVALID_DOC,
               'unparseable text is delivered as stored');
-            test.same(row.jc, { n: 2 },
+            test.strictSame(rows[0].jc, { n: 2 },
               'other JSON columns in the same row still parse');
+            test.strictSame(rows[1].j, { n: 1, big: BIG_EXPECTED, s: 'x' },
+              'the stream carries on: the following row parses normally');
             test.end();
           }, 1500);
         });
       });
     });
+
+    // The catalogue renders the column name inside the check clause
+    // according to the session that reads it: backticks by default,
+    // double quotes under ANSI_QUOTES, bare with sql_quote_show_create=0.
+    // Detection must recognise all three, including names that contain
+    // the quote character itself. ZongJi runs its metadata query on the
+    // connection it is given, so set the session there
+    for (const sessionSetting of [
+      "sql_mode = 'ANSI_QUOTES'",
+      'sql_quote_show_create = 0',
+    ]) {
+      test.test(`detected with session ${sessionSetting}`, test => {
+        const QUOTE_TABLE = 'mariadb_json_quote_test';
+        const conn = mysql.createConnection({
+          ...settings.connection, jsonStrings: false,
+        });
+        conn.query(`SET SESSION ${sessionSetting}`);
+        const zongji = new ZongJi(conn);
+        zongji.on('stopped', () => conn.destroy());
+        test.teardown(() => zongji.stop());
+        zongji.on('error', err => test.fail(err));
+
+        let row = null;
+        let schemas = null;
+        zongji.on('binlog', evt => {
+          if (evt.getTypeName() === 'WriteRows' &&
+              evt.tableMap[evt.tableId].tableName === QUOTE_TABLE) {
+            row = evt.rows[0];
+            schemas = evt.tableMap[evt.tableId].columnSchemas;
+          }
+        });
+
+        testDb.execute([
+          `DROP TABLE IF EXISTS ${QUOTE_TABLE}`,
+          `CREATE TABLE ${QUOTE_TABLE} (
+            id INT PRIMARY KEY,
+            j JSON,
+            \`bt\`\`ick\` JSON,
+            \`dq"uote\` JSON,
+            t LONGTEXT
+          )`,
+        ], err => {
+          if (err) {
+            return test.fail(err);
+          }
+          zongji.start({
+            startAtEnd: true,
+            serverId: testDb.serverId(),
+            includeEvents: ['tablemap', 'writerows'],
+          });
+          zongji.on('ready', () => {
+            testDb.execute([
+              `INSERT INTO ${QUOTE_TABLE} VALUES
+                (1, '${CHECKED_DOC}', '${BACKTICK_DOC}', '${DOC}',
+                 '${PLAIN_DOC}')`,
+            ], err => {
+              if (err) {
+                return test.fail(err);
+              }
+              setTimeout(() => {
+                test.strictSame(schemas.map(schema => schema.IS_JSON),
+                  [false, true, true, true, false]);
+                test.strictSame(row.j, { n: 2 });
+                test.strictSame(row['bt`ick'], { n: 4 },
+                  'a name containing a backtick is matched');
+                test.strictSame(row['dq"uote'],
+                  { n: 1, big: BIG_EXPECTED, s: 'x' },
+                  'a name containing a double quote is matched');
+                test.equal(row.t, PLAIN_DOC);
+                test.end();
+              }, 1500);
+            });
+          });
+        });
+      });
+    }
+
+    // The server flags a column with a column-level json_valid check as
+    // JSON when it is a character or binary string type, not only
+    // LONGTEXT, and a mysql2 query returns parsed values for all of them
+    // (text with jsonStrings). Binary types hold the text as bytes, read
+    // as UTF-8. The same check on other types (DECIMAL, ENUM here) is not
+    // flagged by the server, so those values must be left alone
+    const UNICODE_DOC = '{"s": "café"}';
+    const DECIMAL_TEXT = '123456789012345678.90';
+    for (const jsonStrings of [false, true]) {
+      test.test(`json_valid check on other column types, jsonStrings: ${
+        jsonStrings}`, test => {
+        const TYPES_TABLE = 'mariadb_json_types_test';
+        const zongji = new ZongJi({ ...settings.connection, jsonStrings });
+        test.teardown(() => zongji.stop());
+        zongji.on('error', err => test.fail(err));
+
+        let row = null;
+        let schemas = null;
+        zongji.on('binlog', evt => {
+          if (evt.getTypeName() === 'WriteRows' &&
+              evt.tableMap[evt.tableId].tableName === TYPES_TABLE) {
+            row = evt.rows[0];
+            schemas = evt.tableMap[evt.tableId].columnSchemas;
+          }
+        });
+
+        testDb.execute([
+          `DROP TABLE IF EXISTS ${TYPES_TABLE}`,
+          `CREATE TABLE ${TYPES_TABLE} (
+            id INT PRIMARY KEY,
+            tx TEXT CHECK (json_valid(tx)),
+            vc VARCHAR(100) CHECK (json_valid(vc)),
+            ch CHAR(50) CHECK (json_valid(ch)),
+            lb LONGBLOB CHECK (json_valid(lb)),
+            vb VARBINARY(100) CHECK (json_valid(vb)),
+            d DECIMAL(20,2) CHECK (json_valid(d)),
+            e ENUM('true', 'x') CHECK (json_valid(e)),
+            plain VARCHAR(100)
+          )`,
+        ], err => {
+          if (err) {
+            return test.fail(err);
+          }
+          zongji.start({
+            startAtEnd: true,
+            serverId: testDb.serverId(),
+            includeEvents: ['tablemap', 'writerows'],
+          });
+          zongji.on('ready', () => {
+            testDb.execute([
+              `INSERT INTO ${TYPES_TABLE} VALUES
+                (1, '${CHECKED_DOC}', '${CHECKED_DOC}', '${CHECKED_DOC}',
+                 '${UNICODE_DOC}', '${UNICODE_DOC}', ${DECIMAL_TEXT},
+                 'true', '${CHECKED_DOC}')`,
+            ], err => {
+              if (err) {
+                return test.fail(err);
+              }
+              setTimeout(() => {
+                test.strictSame(schemas.map(schema => schema.IS_JSON),
+                  [false, true, true, true, true, true, false, false, false],
+                  'string and binary types flagged, DECIMAL and ENUM not');
+                for (const name of ['tx', 'vc', 'ch']) {
+                  test.strictSame(row[name],
+                    jsonStrings ? CHECKED_DOC : { n: 2 }, name);
+                }
+                for (const name of ['lb', 'vb']) {
+                  test.strictSame(row[name],
+                    jsonStrings ? UNICODE_DOC : { s: 'café' },
+                    `${name}: bytes read as UTF-8`);
+                }
+                test.equal(row.d, DECIMAL_TEXT,
+                  'DECIMAL keeps its exact decimal text');
+                test.equal(row.e, 'true', 'ENUM value is not converted');
+                test.equal(row.plain, CHECKED_DOC,
+                  'a column without the check stays a string');
+                test.end();
+              }, 1500);
+            });
+          });
+        });
+      });
+    }
 
     test.end();
   });

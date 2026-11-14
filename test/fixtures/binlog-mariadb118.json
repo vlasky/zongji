@@ -171,7 +171,8 @@
         "COLLATION_NAME": "utf8mb4_bin",
         "CHARACTER_SET_NAME": "utf8mb4",
         "COLUMN_COMMENT": "",
-        "COLUMN_TYPE": "longtext"
+        "COLUMN_TYPE": "longtext",
+        "IS_JSON": true
       },
       {
         "COLUMN_NAME": "geo",
@@ -244,7 +245,8 @@
         "COLLATION_NAME": "utf8mb4_bin",
         "CHARACTER_SET_NAME": "utf8mb4",
         "COLUMN_COMMENT": "",
-        "COLUMN_TYPE": "longtext"
+        "COLUMN_TYPE": "longtext",
+        "IS_JSON": true
       },
       {
         "COLUMN_NAME": "vc_comp",

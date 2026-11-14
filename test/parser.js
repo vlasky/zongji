@@ -606,7 +606,20 @@ tap.test('MariaDB fixture decodes offline', test => {
   test.equal(row.i6, '::ffff:8.8.8.8', 'INET6 v4-mapped');
   test.strictSame(row.v, Buffer.from('0000c03f0000204000006040', 'hex'),
     'VECTOR as raw little-endian float32 buffer');
-  test.equal(row.j, '{"a": 1}', 'MariaDB JSON is LONGTEXT text');
+  test.strictSame(row.j, { a: 1 },
+    'MariaDB JSON (LONGTEXT flagged IS_JSON by the metadata fetch) parses');
+  // capture_types.js exercises the big-integer path: exact where
+  // JSON.parse exposes the source text (Node 22+), rounded before that
+  const typesRow = events.find(e => e.getTypeName() === 'WriteRows' &&
+    e.tableMap[e.tableId].tableName === 'capture_types').rows[0];
+  const big = typesRow.js.big;
+  test.ok(big === '9223372036854775807' ||
+    (typeof big === 'number' && Number(process.versions.node.split('.')[0]) < 22),
+    `MariaDB JSON keeps 64-bit integers exact where the runtime allows (got ${
+      typeof big} ${big})`);
+  test.strictSame({ ...typesRow.js, big: null },
+    { a: 1, big: null, arr: ['x', true, null], d: 1.5 },
+    'the rest of the MariaDB JSON document parses');
   test.equal(row.vc_comp, 'squash-'.repeat(30),
     'zlib COMPRESSED column value');
   test.equal(row.txt_comp, 'café latin one', 'latin1 COMPRESSED text');
@@ -623,5 +636,64 @@ tap.test('MariaDB fixture decodes offline', test => {
   test.equal(hires.t3, '-01:02:03.500', 'negative hires TIME(3)');
   test.equal(hires.ts3, '2024-06-15 12:34:56.789',
     'hires TIMESTAMP(3) as string via dateStrings');
+  test.end();
+});
+
+// MariaDB before 10.5.10 has no CHECK_CONSTRAINTS.LEVEL, so the JSON
+// detection query fails there with ER_BAD_FIELD_ERROR. The fetch must fall
+// back to the plain column query, once per instance, instead of halting
+// the stream. Driven with a stub control connection, since no supported
+// test server is that old
+const stubFetch = failure => {
+  const zongji = new ZongJi({});
+  zongji.isMariaDb = true;
+  const errors = [];
+  zongji.on('error', err => errors.push(err));
+  const queries = [];
+  zongji.ctrlConnection = {
+    execute(sql, params, callback) {
+      queries.push(sql);
+      if (sql.includes('CHECK_CONSTRAINTS')) {
+        return callback(failure);
+      }
+      callback(null, [{ COLUMN_NAME: 'j', COLUMN_TYPE: 'longtext' }]);
+    },
+  };
+  const fetch = tableId => new Promise(resolve => zongji._fetchTableInfo(
+    { schemaName: 'db', tableName: 't', tableId }, resolve));
+  return { zongji, errors, queries, fetch };
+};
+
+tap.test('MariaDB metadata fetch falls back without JSON detection', test => {
+  const { zongji, errors, queries, fetch } = stubFetch(Object.assign(
+    new Error("Unknown column 'cc.LEVEL' in 'on clause'"),
+    { code: 'ER_BAD_FIELD_ERROR' }));
+
+  fetch(7).then(() => {
+    test.equal(queries.length, 2, 'detection query, then the plain query');
+    test.notOk(queries[1].includes('CHECK_CONSTRAINTS'));
+    test.strictSame(zongji.tableMap[7].columnSchemas,
+      [{ COLUMN_NAME: 'j', COLUMN_TYPE: 'longtext' }],
+      'schema delivered without IS_JSON');
+    return fetch(8);
+  }).then(() => {
+    test.equal(queries.length, 3,
+      'later fetches go straight to the plain query');
+    test.notOk(queries[2].includes('CHECK_CONSTRAINTS'));
+    test.strictSame(errors, []);
+    test.end();
+  });
+});
+
+tap.test('unrelated metadata errors are not masked by the fallback', test => {
+  const failure = Object.assign(
+    new Error("Unknown column 'something_else' in 'field list'"),
+    { code: 'ER_BAD_FIELD_ERROR' });
+  const { zongji, errors, queries } = stubFetch(failure);
+
+  zongji._fetchTableInfo({ schemaName: 'db', tableName: 't', tableId: 7 },
+    () => test.fail('must not continue after a real error'));
+  test.strictSame(errors, [failure], 'the error surfaces');
+  test.equal(queries.length, 1, 'no retry with the plain query');
   test.end();
 });

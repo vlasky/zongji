@@ -24,10 +24,15 @@ const TableInfoQuery = `SELECT
 // LONGTEXT alias whose only catalogue trace is the automatic column-level
 // json_valid check constraint - the same source the server derives its
 // wire-protocol JSON format flag from, so this detection matches what a
-// mysql2 query sees exactly (including manually declared
-// LONGTEXT CHECK (json_valid(col)) columns, which the server also treats
-// as JSON). MySQL's CHECK_CONSTRAINTS lacks TABLE_NAME and LEVEL, so this
-// query is MariaDB-only.
+// mysql2 query sees exactly (including a manually declared
+// CHECK (json_valid(col)) on a column of any character or binary string
+// type, which the server also treats as JSON; the same check on other
+// types, e.g. DECIMAL or ENUM, is not flagged by the server and is
+// excluded here). The catalogue renders the column name
+// in the clause according to the session: backticks by default, double
+// quotes under ANSI_QUOTES, bare with sql_quote_show_create=0; all three
+// are accepted. MySQL's CHECK_CONSTRAINTS lacks TABLE_NAME and LEVEL, so
+// this query is MariaDB-only.
 const MariadbTableInfoQuery = `SELECT
   c.COLUMN_NAME, c.COLLATION_NAME, c.CHARACTER_SET_NAME,
   c.COLUMN_COMMENT, c.COLUMN_TYPE, c.EXTRA,
@@ -38,10 +43,23 @@ const MariadbTableInfoQuery = `SELECT
     AND cc.TABLE_NAME = c.TABLE_NAME
     AND cc.\`LEVEL\` = 'Column'
     AND cc.CONSTRAINT_NAME = c.COLUMN_NAME
-    AND cc.CHECK_CLAUSE = CONCAT('json_valid(\`',
-      REPLACE(c.COLUMN_NAME, '\`', '\`\`'), '\`)')
+    AND c.DATA_TYPE IN ('char', 'varchar', 'tinytext', 'text', 'mediumtext',
+      'longtext', 'binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob',
+      'longblob')
+    AND cc.CHECK_CLAUSE IN (
+      CONCAT('json_valid(\`', REPLACE(c.COLUMN_NAME, '\`', '\`\`'), '\`)'),
+      CONCAT('json_valid("', REPLACE(c.COLUMN_NAME, '"', '""'), '")'),
+      CONCAT('json_valid(', c.COLUMN_NAME, ')'))
   WHERE c.TABLE_SCHEMA=? AND c.TABLE_NAME=?
   ORDER BY c.ORDINAL_POSITION`;
+
+// CHECK_CONSTRAINTS has no LEVEL column before MariaDB 10.5.10, and older
+// servers lack more of the table, so they reject MariadbTableInfoQuery
+// outright. Only an error that names the catalogue object counts: any other
+// unknown-column or unknown-table error is a real failure and must surface.
+const isUnsupportedDetectionError = err =>
+  (err.code === 'ER_BAD_FIELD_ERROR' || err.code === 'ER_UNKNOWN_TABLE') &&
+  /\bcc\.|CHECK_CONSTRAINTS/i.test(String(err.message));
 
 class ZongJi extends EventEmitter {
   constructor(dsn) {
@@ -78,6 +96,9 @@ class ZongJi extends EventEmitter {
     this.useChecksum = false;
     this.serverVersion = undefined;
     this.isMariaDb = false;
+    // Set when MariadbTableInfoQuery cannot run on this server (see
+    // _fetchTableInfo); the plain query is used from then on
+    this._jsonDetectionUnsupported = false;
 
     this._dsn = dsn;
     this.ctrlConnection = null;
@@ -363,12 +384,20 @@ class ZongJi extends EventEmitter {
     }
 
     const params = [tableMapEvent.schemaName, tableMapEvent.tableName];
-    const query = this.isMariaDb ? MariadbTableInfoQuery : TableInfoQuery;
+    const detectJson = this.isMariaDb && !this._jsonDetectionUnsupported;
+    const query = detectJson ? MariadbTableInfoQuery : TableInfoQuery;
     try {
       // execute() uses a server-side prepared statement: parameters are sent
       // out-of-band (never spliced into SQL text) and the statement is cached
       // per connection, so repeated metadata lookups avoid re-parsing.
       this.ctrlConnection.execute(query, params, (err, rows) => {
+      if (detectJson && err && isUnsupportedDetectionError(err)) {
+        // Fall back to the plain query until the next start(): JSON
+        // columns then arrive as text, as they did before detection
+        // existed
+        this._jsonDetectionUnsupported = true;
+        return this._fetchTableInfo(tableMapEvent, next);
+      }
       if (err) {
         // Errors should be emitted
         this.emit('error', err);
@@ -386,7 +415,7 @@ class ZongJi extends EventEmitter {
         return;
       }
 
-      if (this.isMariaDb) {
+      if (detectJson) {
         // The join computes IS_JSON as 1/0; expose a boolean, tolerating
         // driver settings that surface the value as a string or BigInt
         for (const row of rows) {
@@ -575,6 +604,8 @@ class ZongJi extends EventEmitter {
         }
         this.serverVersion = rows[0].version;
         this.isMariaDb = /mariadb/i.test(this.serverVersion);
+        // A restart may reach a different server than the one that set it
+        this._jsonDetectionUnsupported = false;
         resolve();
       });
     };
