@@ -1567,9 +1567,9 @@ tap.test('Generated columns (virtual and stored)', test => {
   testDb.execute(['SET GLOBAL binlog_row_metadata = MINIMAL'], () => {
   testDb.execute([
     `DROP TABLE IF EXISTS ${TEST_TABLE}`,
-    // Both flavours materialise generated columns (virtual and stored)
-    // into the TableMap and row images as computed values, so they
-    // decode like ordinary columns
+    // Generated columns (virtual and stored) appear in the TableMap and
+    // decode like ordinary columns. Insert images always carry their
+    // computed values; see the assertions below for update and delete
     `CREATE TABLE ${TEST_TABLE} (
       id INT PRIMARY KEY,
       a INT,
@@ -1611,13 +1611,23 @@ tap.test('Generated columns (virtual and stored)', test => {
           test.same(write.rows[0],
             { id: 1, a: 10, v: 20, s: 11, b: 'x' },
             'insert carries computed virtual and stored values');
+
+          // MySQL logs generated columns in every image. MariaDB did too
+          // up to 11.8.8; from 11.8.9 it leaves them out of update and
+          // delete images (the replica recomputes them), and a column
+          // missing from an image decodes as null. Accept either server
+          // behaviour on MariaDB, but never a mix within one event set
+          const omitted = IS_MARIADB && update.rows[0].before.v === null;
+          const generated = (v, s) => omitted ? { v: null, s: null } : { v, s };
           test.same(update.rows[0].before,
-            { id: 1, a: 10, v: 20, s: 11, b: 'x' });
+            { id: 1, a: 10, ...generated(20, 11), b: 'x' },
+            'update before-image: generated columns computed or omitted');
           test.same(update.rows[0].after,
-            { id: 1, a: 20, v: 40, s: 21, b: 'x' },
-            'update after-image carries recomputed values');
+            { id: 1, a: 20, ...generated(40, 21), b: 'x' },
+            'update after-image: generated columns recomputed or omitted');
           test.same(del.rows[0],
-            { id: 1, a: 20, v: 40, s: 21, b: 'x' });
+            { id: 1, a: 20, ...generated(40, 21), b: 'x' },
+            'delete image: generated columns computed or omitted');
 
           // EXTRA identifies generated-ness; the strings are identical
           // on MySQL and MariaDB
